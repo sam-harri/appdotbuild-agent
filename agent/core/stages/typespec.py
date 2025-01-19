@@ -2,15 +2,17 @@ from typing import TypedDict
 import re
 
 PROMPT = """
-Given user application description and structured types and opetations,
-generate TypeSpec models and interfaces for the application.
+Given user application description and structured types and operations,
+generate TypeSpec models and interface for the application. Output just a single interface.
+Every decorated @llm_func operates on free-form text messages and it's arguments should be
+easily extractable from chat messages. Keep argument complexity within what can be extracted / inferred
+from the chat messages directly.
 
-Application mostly operates on free-form user messages.
-TypeSpec is augmented with special decorator that indicates that this function
-is processed by language model parametrized with number of previous messages
-passed to the LLM.
+Application operates ONLY on free-form text messages.
+TypeSpec is extended with special decorator that indicates that this function
+is processed by language model parametrized with number of previous messages passed to the LLM.
 
-extern dec llm_func(target: unknown, history: valueof integer);
+extern dec llm_func(target: unknown, history: valueof int32);
 
 Example input:
 <description>
@@ -30,7 +32,6 @@ Bot that records my diet and calculates calories.
 
 Output:
 <typespec>
-
 model Dish {
     name: String
     ingredients: Ingredient[]
@@ -43,7 +44,8 @@ model Ingredient {
 
 interface DietBot {
     @llm_func(1)
-    recordDish(message: str): Dish;
+    recordDish(dish: Dish): void;
+    @llm_func(1)
     listDishes(from: Date, to: Date): Dish[];
 }
 </typespec>
@@ -53,6 +55,8 @@ User application description:
 
 Application specification:
 {{application_specification}}
+
+Return TypeSpec definition encompassed with <typespec> tag.
 """.strip()
 
 
@@ -63,6 +67,7 @@ class TypespecInput(TypedDict):
 
 class TypespecOutput(TypedDict):
     typespec_definitions: str
+    llm_functions: list[str]
 
 
 def parse_output(output: str) -> TypespecOutput:
@@ -74,4 +79,8 @@ def parse_output(output: str) -> TypespecOutput:
     if match is None:
         raise ValueError("Failed to parse output")
     typespec_definitions = match.group(1).strip()
-    return TypespecOutput(typespec_definitions=typespec_definitions)
+    llm_functions = re.findall(
+        r'@llm_func\(\d+\)\s*(\w+)\s*\(',
+        typespec_definitions
+    )
+    return TypespecOutput(typespec_definitions=typespec_definitions, llm_functions=llm_functions)

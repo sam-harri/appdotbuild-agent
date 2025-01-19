@@ -1,0 +1,39 @@
+import { client } from "../common/llm";
+import { Message } from "../common/handler";
+const nunjucks = require("nunjucks");
+
+const router_prompt: string = `
+Based on converstation between user and assistant determine which function should
+handle current message based on function description and message content.
+
+{% for function in functions%}
+<function name="{{function.name}}">{{function.description}}</function>
+{% endfor %}
+
+Reply with the name of the function only.
+
+Conversation:
+{% for message in messages %}
+<role name="{{message.role}}">{{message.content}}</role>
+{% endfor %}
+`;
+
+export interface FunctionDef {
+    name: string;
+    description: string;
+}
+
+export const getRoute = async (messages: Message[], functions: FunctionDef[]): Promise<string> => {
+    const request = nunjucks.renderString(router_prompt, { messages, functions });
+    const response = await client.messages.create({
+        model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+        max_tokens: 256,
+        messages: [{ role: "user", content: request }]
+    });
+    switch (response.content[0].type) {
+        case "text":
+            return response.content[0].text;
+        default:
+            throw new Error("Unexpected response type");
+    }
+};
