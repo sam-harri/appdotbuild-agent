@@ -2,13 +2,11 @@ from typing import TypedDict
 import re
 
 PROMPT = """
-Given user application description and structured types and operations,
-generate TypeSpec models and interface for the application. Output just a single interface.
+Given user application description generate TypeSpec models and interface for the application. Output just a single interface.
 Every decorated @llm_func operates on free-form text messages and it's arguments should be
 easily extractable from chat messages. Keep argument complexity within what can be extracted / inferred
-from the chat messages directly.
+from the chat messages directly. When designing the interface expect that every function has a pre- and post-processor.
 
-Application operates ONLY on free-form text messages.
 TypeSpec is extended with special decorator that indicates that this function
 is processed by language model parametrized with number of previous messages passed to the LLM.
 
@@ -19,18 +17,21 @@ Example input:
 Bot that records my diet and calculates calories.
 </description>
 
-<specification>
-    <types>
-        <type>dish</type>
-        <type>ingredient</type>
-    </types>
-    <operations>
-        <operation>record dish</operation>
-        <operation>list dishes</operation>
-    </operations>
-</specification>
-
 Output:
+<reasoning>
+I expect user to send messages like "I ate a burger" or "I had a salad for lunch".
+LLM can extract and impute the arguments from plain text and pass them to the handler
+"I ate a burger" -> recordDish({name: "burger", ingredients: [
+    {name: "bun", calories: 200},
+    {name: "patty", calories: 300},
+    {name: "lettuce", calories: 10},
+    {name: "tomato", calories: 20},
+    {name: "cheese", calories: 50},
+]})
+- recordDish(dish: Dish): void;
+...
+</reasoning>
+
 <typespec>
 model Dish {
     name: String
@@ -53,10 +54,7 @@ interface DietBot {
 User application description:
 {{application_description}}
 
-Application specification:
-{{application_specification}}
-
-Return TypeSpec definition encompassed with <typespec> tag.
+Return <reasoning> and TypeSpec definition encompassed with <typespec> tag.
 """.strip()
 
 
@@ -66,21 +64,23 @@ class TypespecInput(TypedDict):
 
 
 class TypespecOutput(TypedDict):
+    reasoning: str
     typespec_definitions: str
     llm_functions: list[str]
 
 
 def parse_output(output: str) -> TypespecOutput:
     pattern = re.compile(
-        r"<typespec>(.*?)</typespec>",
+        r"<reasoning>(.*?)</reasoning>.*?<typespec>(.*?)</typespec>",
         re.DOTALL,
     )
     match = pattern.search(output)
     if match is None:
         raise ValueError("Failed to parse output")
-    typespec_definitions = match.group(1).strip()
+    reasoning = match.group(1).strip()
+    typespec_definitions = match.group(2).strip()
     llm_functions = re.findall(
         r'@llm_func\(\d+\)\s*(\w+)\s*\(',
         typespec_definitions
     )
-    return TypespecOutput(typespec_definitions=typespec_definitions, llm_functions=llm_functions)
+    return TypespecOutput(reasoning=reasoning, typespec_definitions=typespec_definitions, llm_functions=llm_functions)

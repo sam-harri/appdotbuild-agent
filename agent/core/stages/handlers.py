@@ -3,8 +3,7 @@ import re
 
 
 PROMPT = """
-Based on TypeSpec application definition and drizzle schema, generate a handler
-for {{function_name}} function.
+Based on TypeSpec application definition and drizzle schema, generate a handlervfor {{function_name}} function.
 
 Handler should satisfy following interface:
 
@@ -65,6 +64,7 @@ Application Definitions:
 Handler to implement: {{function_name}}
 
 Return output within <handler> tag. Generate only the handler function and table imports, omit pre- and post-processors.
+Handler code should contain just explicit logic such as database operations, performing calculations etc.
 """.strip()
 
 
