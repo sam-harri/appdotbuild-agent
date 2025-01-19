@@ -1,3 +1,5 @@
+import { Message } from "../common/handler";
+import { client } from "../common/llm";
 {{handler}}
 
 
@@ -17,10 +19,10 @@ Output:
 {{ example[1] }}
 {% endfor %}
 
-Conversation:
+Conversation:{% raw %}
 {% for message in messages %}
 <role name="{{message.role}}">{{message.content}}</role>
-{% endfor %}
+{% endfor %}{% endraw %}
 `;
 
 const preProcessor = async (input: Message[]): Promise<[string]> => {

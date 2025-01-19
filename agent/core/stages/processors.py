@@ -19,8 +19,8 @@ Return output in the format:
 
 <examples>
     <example>
-        <input>// Example user input</input>
-        <output>// Expected structured JSON output</output>
+        <input>// Example user input. Plain text messages such as what is the time? bench press 80x6 etc.</input>
+        <output>// Expected structured JSON output of the arguments.</output>
     </example>
 </examples>
 """.strip()

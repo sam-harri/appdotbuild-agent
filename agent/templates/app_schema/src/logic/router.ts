@@ -23,7 +23,11 @@ export interface FunctionDef {
     description: string;
 }
 
-export const getRoute = async (messages: Message[], functions: FunctionDef[]): Promise<string> => {
+const functions: FunctionDef[] = [
+    { name: 'dummy', description: 'catch-all function that just gets plain response from LLM' },
+]
+
+export const getRoute = async (messages: Message[]): Promise<string> => {
     const request = nunjucks.renderString(router_prompt, { messages, functions });
     const response = await client.messages.create({
         model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
