@@ -95,12 +95,14 @@ class TypespecOutput(TypedDict):
     typespec_definitions: str
     llm_functions: list[str]
 
+
 def extract_llm_func_names(output: str) -> list[str]:
     pattern = re.compile(
         r'@llm_func\(\d+\)\s*(\w+)\s*\(',
         re.DOTALL,
     )
     return pattern.findall(output)
+
 
 def parse_output(output: str) -> TypespecOutput:
     pattern = re.compile(
