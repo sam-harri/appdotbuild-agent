@@ -124,6 +124,11 @@ aws sso login --profile dev
 export AWS_PROFILE=dev
 ```
 
+4. Install tsp TypeSpec compiler:
+```bash
+npm install -g @typespec/compiler
+```
+
 ## Notebook Usage
 
 The Scratchpad notebook in `agent/` demonstrates the framework's capabilities:
