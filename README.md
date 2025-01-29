@@ -119,15 +119,18 @@ sso_registration_scopes = sso:account:access
 aws sso login --profile dev
 ```
 
+In case of access issues, make sure you have access to the AWS sandbox account.
+
 3. For local development:
 ```bash
 export AWS_PROFILE=dev
 ```
 
-4. Install tsp TypeSpec compiler:
+4. For running compilation in containers, first run:
 ```bash
-npm install -g @typespec/compiler
+./agent/prepare_containers.sh
 ```
+DockerSandboxTest python notebook contains sample usage.
 
 ## Notebook Usage
 
