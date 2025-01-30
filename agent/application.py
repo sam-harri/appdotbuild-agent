@@ -59,9 +59,11 @@ class Application:
         copytree(self.template_dir, self.generation_dir, ignore=ignore_patterns('*.pyc', '__pycache__', 'node_modules'))
 
         with open(os.path.join(self.generation_dir, "tsp_schema", "main.tsp"), "a") as f:
+            f.write("\n")
             f.write(typespec_definitions)
         
         with open(os.path.join(self.generation_dir, "app_schema/src/db/schema", "application.ts"), "a") as f:
+            f.write("\n")
             f.write(drizzle_schema)
         
         interpolator = Interpolator(self.generation_dir)
