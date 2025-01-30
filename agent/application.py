@@ -1,18 +1,15 @@
-import re
 import os
 import jinja2
 import concurrent.futures
 from anthropic import AnthropicBedrock
 from core import stages
-import json
-import subprocess
 from shutil import copytree, ignore_patterns
 from search import Node, SearchPolicy
 from services import CompilerService
-
+from core.interpolator import Interpolator
 
 class Application:
-    def __init__(self, client: AnthropicBedrock, compiler: CompilerService, template_dir: str = "templates"):
+    def __init__(self, client: AnthropicBedrock, compiler: CompilerService, template_dir: str = "templates", output_dir: str = "app_output"):
         self.client = client
         self.policy = SearchPolicy(client, compiler)
         self.jinja_env = jinja2.Environment()
@@ -21,6 +18,9 @@ class Application:
         self.router_tpl = self.jinja_env.from_string(stages.router.PROMPT)
         self.handlers_tpl = self.jinja_env.from_string(stages.handlers.PROMPT)
         self.preprocessors_tpl = self.jinja_env.from_string(stages.processors.PROMPT_PRE)
+        self.template_dir = template_dir
+        self.iteration = 0
+        self.output_dir = os.path.join(output_dir, "generated")
         self._model = "anthropic.claude-3-5-sonnet-20241022-v2:0"
     
     def create_bot(self, application_description: str):
@@ -41,13 +41,32 @@ class Application:
         preprocessors = self._make_preprocessors(llm_functions, typespec_definitions)
         print("Generating Handlers...")
         handlers = self._make_handlers(llm_functions, typespec_definitions, drizzle_schema)
+        print("Generating Application...")
+        application = self._make_application(application_description, typespec_definitions, drizzle_schema, preprocessors, handlers)
         return {
             "typespec": typespec.data,
             "drizzle": drizzle.data,
             "router": router,
             "preprocessors": preprocessors,
             "handlers": handlers,
+            "application": application,
         }
+
+    def _make_application(self, application_description: str, typespec_definitions: str, drizzle_schema: str, preprocessors: dict, handlers: dict):
+        self.iteration += 1
+        self.generation_dir = os.path.join(self.output_dir, f"generation-{self.iteration}")
+
+        copytree(self.template_dir, self.generation_dir, ignore=ignore_patterns('*.pyc', '__pycache__', 'node_modules'))
+
+        with open(os.path.join(self.generation_dir, "tsp_schema", "main.tsp"), "a") as f:
+            f.write(typespec_definitions)
+        
+        with open(os.path.join(self.generation_dir, "app_schema/src/db/schema", "application.ts"), "a") as f:
+            f.write(drizzle_schema)
+        
+        interpolator = Interpolator(self.generation_dir)
+        
+        return interpolator.interpolate_all(preprocessors, handlers)
     
     def _make_typespec(self, application_description: str):
         BRANCH_FACTOR, MAX_DEPTH, MAX_WORKERS = 3, 3, 5
