@@ -20,7 +20,10 @@ Return output in the format:
 <examples>
     <example>
         <input>// Example user input. Plain text messages such as what is the time? bench press 80x6 etc.</input>
-        <output>// Expected structured JSON output of the arguments.</output>
+        <output>
+            // Expected structured JSON output of the arguments.
+            // Follow proper JSON format, undefined values should be null.
+        </output>
     </example>
 </examples>
 """.strip()

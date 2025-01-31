@@ -1,5 +1,5 @@
 import { handlers } from "./logic";
-import { FunctionDef, getRoute } from "./logic/router";
+import { getRoute } from "./logic/router";
 import { getHistory, putMessage } from "./common/crud";
 import 'dotenv/config';
 const { Context, Telegraf } = require('telegraf');
@@ -20,7 +20,7 @@ const mainHandler = async (ctx: typeof Context) => {
     }
 }
 
-const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
+const bot = new Telegraf(process.env['TELEGRAM_BOT_TOKEN']);
 bot.on(message('text'), mainHandler);
 bot.launch();
 

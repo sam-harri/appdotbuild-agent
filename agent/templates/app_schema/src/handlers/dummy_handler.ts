@@ -1,4 +1,4 @@
-import { GenericHandler, Message } from "../common/handler";
+import { GenericHandler, type Message } from "../common/handler";
 import { client } from "../common/llm";
 const nunjucks = require('nunjucks');
 
@@ -35,6 +35,8 @@ Conversation:
 {% for message in messages %}
 <role name="{{message.role}}">{{message.content}}</role>
 {% endfor %}
+
+Respond with arguments in JSON format only inside <arguments></arguments> block.
 `;
 
 const postProcessorPrompt = `
@@ -53,11 +55,13 @@ const preProcessor = async (input: Message[]): Promise<Options> => {
     const response = await client.messages.create({
         model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
         max_tokens: 2048,
-        messages: [{ role: 'user', content: userPrompt }, { role: 'assistant', content: '{'}]
+        messages: [{ role: 'user', content: userPrompt }, { role: 'assistant', content: '<arguments>{'}]
     });
     switch (response.content[0].type) {
         case "text":
-            return JSON.parse('{' + response.content[0].text);
+            const fullResponse = '{' + response.content[0].text;
+            const jsonResponse = fullResponse.match(/{([^}]*)}/)![0];
+            return JSON.parse(jsonResponse!);
         default:
             throw new Error("Unexpected response type");
     }

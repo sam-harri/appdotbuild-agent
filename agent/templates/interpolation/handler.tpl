@@ -1,7 +1,7 @@
-import { Message, GenericHandler } from "../common/handler";
+import { type Message, GenericHandler } from "../common/handler";
 import { client } from "../common/llm";
 const nunjucks = require('nunjucks');
-import { {% for type in typescript_schema_type_names %} {{type}}, {% endfor %} } from "../common/schema";
+import { {% for type in typescript_schema_type_names %}type {{type}}, {% endfor %} } from "../common/schema";
 
 {{handler}}
 
@@ -25,6 +25,8 @@ Conversation:{% raw %}
 {% for message in messages %}
 <role name="{{message.role}}">{{message.content}}</role>
 {% endfor %}{% endraw %}
+
+Respond with arguments in JSON format only inside <arguments></arguments> block.
 `;
 
 const preProcessor = async (input: Message[]): Promise<Options> => {
@@ -32,7 +34,7 @@ const preProcessor = async (input: Message[]): Promise<Options> => {
     const response = await client.messages.create({
         model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
         max_tokens: 2048,
-        messages: [{ role: 'user', content: userPrompt }, { role: 'assistant', content: '{'}]
+        messages: [{ role: 'user', content: userPrompt }, { role: 'assistant', content: '<arguments>{'}]
     });
     switch (response.content[0].type) {
         case "text":

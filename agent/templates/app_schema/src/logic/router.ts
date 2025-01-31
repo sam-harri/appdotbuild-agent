@@ -1,5 +1,5 @@
 import { client } from "../common/llm";
-import { Message } from "../common/handler";
+import { type Message } from "../common/handler";
 const nunjucks = require("nunjucks");
 
 const router_prompt: string = `
@@ -22,10 +22,11 @@ Conversation:
 export interface FunctionDef {
     name: string;
     description: string;
+    examples: string[];
 }
 
 const functions: FunctionDef[] = [
-    { name: 'dummy', description: 'catch-all function that just gets plain response from LLM' },
+    { name: 'dummy', description: 'catch-all function that just gets plain response from LLM', examples: ['hello'] },
 ]
 
 export const getRoute = async (messages: Message[]): Promise<string> => {

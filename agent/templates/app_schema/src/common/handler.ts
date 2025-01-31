@@ -24,7 +24,7 @@ class GenericHandler<Options, Output> implements Handler<Options, Output> {
 }
 
 export {
-    Message,
-    Handler,
+    type Message,
+    type Handler,
     GenericHandler
 };
