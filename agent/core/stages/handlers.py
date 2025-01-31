@@ -39,7 +39,6 @@ Example handler implementation:
 <handler>
 import { db } from "../db";
 import { customTable } from '../db/schema/application'; // all drizzle tables are defined in this file
-import { Message, Person } from "../common/schema";
 
 interface Options {
     content: string;
@@ -68,7 +67,7 @@ Application Definitions:
 
 Handler to implement: {{function_name}}
 
-Return output within <handler> tag. Generate only the handler function and table imports, omit pre- and post-processors.
+Return output within <handler> tag. Generate only the handler function and table imports from drizzle schema, omit pre- and post-processors.
 Handler code should contain just explicit logic such as database operations, performing calculations etc.
 """.strip()
 
