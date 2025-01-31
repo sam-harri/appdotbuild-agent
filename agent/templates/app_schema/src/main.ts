@@ -20,7 +20,7 @@ const mainHandler = async (ctx: typeof Context) => {
     }
 }
 
-const bot = new Telegraf(process.env.BOT_TOKEN);
+const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 bot.on(message('text'), mainHandler);
 bot.launch();
 
