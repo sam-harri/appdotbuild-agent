@@ -11,10 +11,12 @@ const mainHandler = async (ctx: typeof Context) => {
     const validMessages = messages.filter(msg => msg.role !== null && msg.content !== null) as { role: "user" | "assistant"; content: string }[];
     const route = await getRoute(validMessages);
     const handler = handlers[route];
-    const result = await handler.execute(validMessages);
-    if (result[0].role === "assistant") {
-        ctx.reply(result[0].content);
-        await putMessage(ctx.from!.id.toString(), 'assistant', result[0].content);
+    if (handler) {
+        const result = await handler.execute(validMessages);
+        if (result[0].role === "assistant") {
+            ctx.reply(result[0].content);
+            await putMessage(ctx.from!.id.toString(), 'assistant', result[0].content);
+        }
     }
 }
 

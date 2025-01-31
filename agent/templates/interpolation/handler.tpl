@@ -36,7 +36,9 @@ const preProcessor = async (input: Message[]): Promise<Options> => {
     });
     switch (response.content[0].type) {
         case "text":
-            return JSON.parse('{' + response.content[0].text);
+            const fullResponse = '{' + response.content[0].text;
+            const jsonResponse = fullResponse.match(/{([^}]*)}/)![0];
+            return JSON.parse(jsonResponse!);
         default:
             throw new Error("Unexpected response type");
     }
