@@ -5,7 +5,7 @@ const nunjucks = require("nunjucks");
 const router_prompt: string = `{% raw %}
 Based on converstation between user and assistant determine which function should
 handle current message based on function description and message content.
-{% for function in functions%}
+{% for function in functions %}
 <function name="{{function.name}}">
     <description>{{function.description}}</description>
     {% for example in function.examples %}
@@ -23,12 +23,13 @@ Conversation:
 export interface FunctionDef {
     name: string;
     description: string;
+    examples: string[];
 }
 
 const functions: FunctionDef[] = [
     {% for function in functions %}{
-        name: {{ function.name }},
-        description: {{ function.description }},
+        name: "{{ function.name }}",
+        description: "{{ function.description }}",
         examples: [{% for example in function.examples %}
             "{{ example }}",{% endfor %}
         ]
