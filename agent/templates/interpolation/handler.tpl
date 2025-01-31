@@ -27,32 +27,33 @@ Conversation:{% raw %}
 {% endfor %}{% endraw %}
 `;
 
-const preProcessor = async (input: Message[]): Promise<[string]> => {
+const preProcessor = async (input: Message[]): Promise<Options> => {
+    const userPrompt = nunjucks.renderString(preProcessorPrompt, { messages: input });
     const response = await client.messages.create({
         model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
         max_tokens: 2048,
-        messages: input.map(({ role, content }) => ({ role, content }))
+        messages: [{ role: 'user', content: userPrompt }, { role: 'assistant', content: '{'}]
     });
     switch (response.content[0].type) {
         case "text":
-            return [response.content[0].text];
+            return JSON.parse('{' + response.content[0].text);
         default:
             throw new Error("Unexpected response type");
     }
 };
 
 const postProcessorPrompt = `
-Generate response to user using output from recordUser function and conversation.
+Generate response to user using output from {{handler_name}} function and conversation.
 
-{{output}}
+{% raw %}{{output}}{% endraw %}
 
-Conversation:
+Conversation:{% raw %}
 {% for message in messages %}
 <role name="{{message.role}}">{{message.content}}</role>
-{% endfor %}
+{% endfor %}{% endraw %}
 `
 
-const postProcessor = async (output: string, input: Message[]): Promise<Message[]> => {
+const postProcessor = async (output: object, input: Message[]): Promise<Message[]> => {
     const assistantPrompt = nunjucks.renderString(postProcessorPrompt, { output, messages: input });
     const response = await client.messages.create({
         model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
@@ -67,4 +68,4 @@ const postProcessor = async (output: string, input: Message[]): Promise<Message[
     }
 };
 
-export const {{handler_name}} = new GenericHandler<[string], string>(handle, preProcessor, postProcessor);
+export const {{handler_name}} = new GenericHandler(handle, preProcessor, postProcessor);
