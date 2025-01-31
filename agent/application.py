@@ -35,8 +35,8 @@ class Application:
         typescript_schema = self._make_typescript_schema(typespec.data["output"]["typespec_definitions"])
         if typescript_schema.score != 1:
             raise Exception("Failed to generate typescript schema")
-        print("Compiling Drizzle...")
         typescript_schema_definitions = typescript_schema.data["output"]["typescript_schema"]
+        print("Compiling Drizzle...")        
         typespec_definitions = typespec.data["output"]["typespec_definitions"]
         llm_functions = typespec.data["output"]["llm_functions"]
         drizzle = self._make_drizzle(typespec_definitions)
@@ -158,7 +158,7 @@ class Application:
         return preprocessors
     
     @observe(capture_input=False, capture_output=False)
-    def _make_handlers(self, llm_functions: list[str], typespec_definitions: str, drizzle_schema: str):
+    def _make_handlers(self, llm_functions: list[str], typespec_definitions: str, typescript_schema_definitions: str, drizzle_schema: str):
         MAX_WORKERS = 5
         trace_id = langfuse_context.get_current_trace_id()
         observation_id = langfuse_context.get_current_observation_id()
