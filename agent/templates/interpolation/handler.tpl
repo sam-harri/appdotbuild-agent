@@ -1,5 +1,6 @@
 import { Message, GenericHandler } from "../common/handler";
 import { client } from "../common/llm";
+const nunjucks = require('nunjucks');
 import { {% for type in typescript_schema_type_names %} {{type}}, {% endfor %} } from "../common/schema";
 
 {{handler}}
@@ -49,7 +50,7 @@ Conversation:
 {% for message in messages %}
 <role name="{{message.role}}">{{message.content}}</role>
 {% endfor %}
-`ж
+`
 
 const postProcessor = async (output: string, input: Message[]): Promise<Message[]> => {
     const assistantPrompt = nunjucks.renderString(postProcessorPrompt, { output, messages: input });
