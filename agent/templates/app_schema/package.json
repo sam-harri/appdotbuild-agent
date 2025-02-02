@@ -16,6 +16,6 @@
   },
   "scripts": {
     "start": "bun run db:push && bun src/main.ts",
-    "db:push": "drizzle-kit push"
+    "db:push": "drizzle-kit push --force"
   }
 }
