@@ -27,7 +27,7 @@ bytes: Represents a sequence of bytes
 null: Represents a null value
 -unknown: Represents a value of any type
 -void: Used to indicate no return value for functions/operations
-NOTE: Avoid using other types.
+NOTE: Avoid using other types. Avoid using reserved keywords for property / type names: ["model", "interface"].
 
 TypeSpec is extended with special decorator that indicates that this function
 is processed by language model parametrized with number of previous messages passed to the LLM.

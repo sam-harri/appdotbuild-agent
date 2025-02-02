@@ -33,7 +33,7 @@ const functions: FunctionDef[] = [
         examples: [{% for example in function.examples %}
             "{{ example }}",{% endfor %}
         ]
-    }{% endfor %}
+    },{% endfor %}
 ]
 
 export const getRoute = async (messages: Message[]): Promise<string> => {
