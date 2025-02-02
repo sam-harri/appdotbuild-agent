@@ -1,9 +1,11 @@
 import os
 import subprocess
 import tempfile
+import jinja2
 from typing import Optional
 from anthropic import AnthropicBedrock
 from core import stages
+from compiler.core import Compiler
 
 def write_tsp_file(content: str, filepath: str) -> None:
     """Write TypeSpec content to a file."""
@@ -29,6 +31,9 @@ def evaluate_typespec_generation() -> float:
     Run TypeSpec generation 50 times and evaluate success rate.
     Returns percentage of successful compilations.
     """
+    jinja_env = jinja2.Environment()
+    typespec_tpl = jinja_env.from_string(stages.typespec.PROMPT)
+    compiler = Compiler("botbuild/tsp_compiler", "botbuild/app_schema")
     try:
         # Initialize AWS client
         client = AnthropicBedrock(aws_profile="dev", aws_region="us-west-2")
@@ -60,9 +65,7 @@ def evaluate_typespec_generation() -> float:
             
             try:
                 # Generate TypeSpec
-                prompt = stages.typespec.PROMPT.format(
-                    application_description=description
-                )
+                prompt = typespec_tpl.render(application_description=description)
                 
                 print(f"\nAttempt {i + 1}/{total_attempts}:")
                 print(f"Description: {description}")
@@ -82,13 +85,16 @@ def evaluate_typespec_generation() -> float:
                     continue
                     
                 if result and result.get("typespec_definitions"):
-                    # Write to temporary file
-                    tsp_filepath = os.path.join(tmpdir, f'test_{i}.tsp')
-                    write_tsp_file(result["typespec_definitions"], tsp_filepath)
-                    print("TypeSpec content written to file")
+                    result = compiler.compile_typespec("\n".join([
+                        'import "./helpers.js";',
+                        ''
+                        'extern dec llm_func(target: unknown, history: valueof int32);',
+                        '',
+                        result["typespec_definitions"]
+                    ]))
                     
                     # Compile and check success
-                    if compile_typespec(tsp_filepath):
+                    if result["exit_code"] == 0:
                         successful_compilations += 1
                         print("TypeSpec compilation successful")
                     else:
