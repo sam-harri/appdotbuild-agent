@@ -21,7 +21,7 @@ class Compiler:
     def compile_typespec(self, schema: str):
         container = self.client.containers.run(
             self.tsp_image,
-            command=["sleep", "1"],
+            command=["sleep", "10"],
             detach=True,
         )
         schema_path, schema = "schema.tsp", schema.replace("'", "\'")
@@ -48,7 +48,7 @@ class Compiler:
             schema_path, schema = "src/db/schema/application.ts", schema.replace("'", "\'")
             container = self.client.containers.run(
                 self.app_image,
-                command=["sleep", "1"],
+                command=["sleep", "10"],
                 detach=True,
                 network=network.name,
             )
