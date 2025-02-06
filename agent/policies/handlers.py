@@ -79,18 +79,21 @@ Handler to implement: {{function_name}}
 Return output within <handler> tag.
 
 Generate only:
-1. The handler export function with Options, Output interfaces,
-2. Required table imports from "../db/schema/application" from drizzle schema (STRICTLY FOLLOW EXACT NAMES OF TABLES TO DRIZZLE SCHEMA): 'import { customTable } from "../db/schema/application";',
-3. Statement if required: 'import { db } from "../db";',
-4. Relevant imports from Drizzle ORM if required: 'import { eq } from "drizzle-orm";',
-5. Required only imports from typespec schema (STRICTLY FOLLOW EXACT NAMES OF TYPES TO TYPESCRIPT SCHEMA): 'import { CarPoem } from "../common/schema";'.
+1. handler export function with Options, Output interfaces.
 
 Omit in generated code:
-1. Avoid generating Pre- and Post-processors,
-2. Avoid adding unused imports,
-3. Avoid importing any other other files.
+1. Avoid generating Pre- and Post-processors.
 
-Handler function code should make use of TypeScript schema types and interfaces and drizzle schema types and interfaces and contain just explicit logic such as database operations, performing calculations etc.
+Handler function code should make use of:
+1. TypeScript schema types and
+2. interfaces and
+3. drizzle schema types and
+4. interfaces and
+contain:
+1. explicit business logic
+such as:
+1. database operations, 
+2. performing calculations etc.
 
 Code style:
 1. Always use quotes "" not '' for strings,
@@ -108,6 +111,14 @@ Code style:
     - Enum names should be PascalCase: `enum UserRole`
 
   
+Note on imports:
+* Use only required imports, reread the code to make sure you are importing only required files,
+* STRICTLY FOLLOW EXACT NAMES OF TABLES TO DRIZZLE SCHEMA, TYPE NAMES FROM TYPESPEC SCHEMA,
+* Drizzle schema imports must always be from "../db/schema/application", for example: import { customTable } from "../db/schema/application";,
+* Typespec schema imports must always be from "../common/schema", for example: import { CarPoem } from "../common/schema";,
+* Drizzle ORM operators imports must come from "drizzle-orm" if required: import { eq } from "drizzle-orm";
+* If using db instance, use: import { db } from "../db";,
+
 Drizzle style guide:
 
 <drizzle_guide>
