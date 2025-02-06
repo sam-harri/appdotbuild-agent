@@ -1,9 +1,17 @@
-from typing import TypedDict
+from dataclasses import dataclass
+from contextlib import contextmanager
 import re
+import uuid
+import jinja2
+from anthropic.types import MessageParam
+from langfuse.decorators import observe
+from .common import TaskNode
+from tracing_client import TracingClient
+from compiler.core import Compiler, CompileResult
 
 
 PROMPT = """
-Based on TypeSpec application definition and drizzle schema, generate a handler for {{function_name}} function.
+Based on TypeScript application definition and drizzle schema, generate a handler for {{function_name}} function.
 Handler always accepts single argument. It should be declared at the beginning as interface Options;
 Handler should satisfy following interface:
 
@@ -38,34 +46,62 @@ Example handler implementation:
 
 <handler>
 import { db } from "../db";
-import { customTable } from '../db/schema/application'; // all drizzle tables are defined in this file
+import { customTable } from "../db/schema/application"; // all drizzle tables are defined in this file
 
 interface Options {
     content: string;
 };
 
-const handle = (options: Options): string => {
+export const handle = (options: Options): string => {
     await db.insert(customTable).values({ content: options.content }).execute();
     return input;
 };
+
 </handler>
-
-TypeSpec is extended with special decorator that indicates that this function
-is processed by language model parametrized with number of previous messages passed to the LLM.
-
-extern dec llm_func(target: unknown, history: valueof int32);
 
 Application Definitions:
 
-<typescript_schema>
+<typespec>
+{{typesspec_schema}}
+</typespec>
+
+<typescript>
 {{typescript_schema}}
-</typescript_schema>
+</typescript>
 
 <drizzle>
 {{drizzle_schema}}
 </drizzle>
 
-Drizzle guide:
+Handler to implement: {{function_name}}
+
+Return output within <handler> tag.
+
+Generate only:
+1. The handler export function with Options, Output interfaces,
+2. Required table imports from drizzle schema (STRICTLY FOLLOW EXACT NAMES OF TABLES TO DRIZZLE SCHEMA): 'import { customTable } from "../db/schema/application"; // all drizzle tables are defined in this file',
+3. Statement if required: 'import { db } from "../db";',
+4. Relevant imports from Drizzle ORM if required: 'import { eq } from "drizzle-orm";',
+5. Required only imports from typespec schema (STRICTLY FOLLOW EXACT NAMES OF TYPES TO TYPESCRIPT SCHEMA): 'import { CarPoem } from "../common/schema";'.
+
+Omit in generated code:
+1. Avoid generating Pre- and Post-processors,
+2. Avoid adding unused imports,
+3. Avoid importing any other other files.
+
+Handler function code should make use of TypeScript schema types and interfaces and drizzle schema types and interfaces and contain just explicit logic such as database operations, performing calculations etc.
+
+Code style:
+1. Always use quotes "" not '' for strings,
+2. TypeScript types must be imported using a type-only import since 'verbatimModuleSyntax' is enabled,
+3. Use underscored names (i.e. _options) if they not used in the code (e.g. in function parameters).
+4. Make sure to consistently use nullability and never assign null to non-nullable types. For example:
+   - If a field is defined as `string` in an interface, don't assign `null` or `undefined` to it
+   - If a field can be null, explicitly define it as `string | null` in the interface
+   - When working with arrays of objects, ensure each object property matches the interface type exactly
+   - Use optional properties with `?` instead of allowing null values where appropriate
+
+Drizzle style guide:
 
 <drizzle_guide>
 # Drizzle ORM Quick Reference
@@ -73,7 +109,6 @@ Drizzle guide:
 ## Essential Commands
 
 ### Query Operations
-```typescript
 // Select
 const all = await db.select().from(users);
 const one = await db.select().from(users).where(eq(users.id, 1));
@@ -96,10 +131,8 @@ await db.update(users)
 
 // Delete
 await db.delete(users).where(eq(users.id, 1));
-```
 
 ### Relations & Joins
-```typescript
 // Get related data
 const usersWithPosts = await db.query.users.findMany({
   with: { posts: true }
@@ -109,27 +142,14 @@ const usersWithPosts = await db.query.users.findMany({
 const joined = await db.select()
   .from(users)
   .leftJoin(posts, eq(users.id, posts.userId));
-```
 
 ### Transactions
-```typescript
 const result = await db.transaction(async (tx) => {
   const user = await tx.insert(users).values({ name: 'John' });
   await tx.insert(posts).values({ userId: user.id, title: 'Post' });
 });
-```
-
-### Migrations
-```bash
-# Create migration
-drizzle-kit generate:pg
-
-# Apply migration
-drizzle-kit push:pg
-```
 
 ### Common Filters
-```typescript
 where(eq(users.id, 1))           // equals
 where(ne(users.id, 1))           // not equals
 where(gt(users.age, 18))         // greater than
@@ -140,21 +160,17 @@ where(like(users.name, '%John%')) // LIKE
 where(ilike(users.name, '%john%')) // ILIKE
 where(and(...))                   // AND
 where(or(...))                    // OR
-```
 
 ## Troubleshooting Common TypeScript Errors
 
 ### 1. Operator Imports
-```typescript
 // Always import operators from drizzle-orm
 import { eq, and, or, like, gt, lt } from 'drizzle-orm';
 
 // For PostgreSQL specific operators
 import { eq } from 'drizzle-orm/pg-core';
-```
 
 ### 2. Proper Query Building
-```typescript
 // Correct way to build queries
 const query = db.select()
   .from(table)
@@ -165,12 +181,10 @@ let baseQuery = db.select().from(table);
 if (condition) {
   baseQuery = baseQuery.where(eq(table.column, value));
 }
-```
 
 ### 3. Array Operations
-```typescript
 // For array comparisons, use 'in' operator instead of 'eq'
-import { inArray } from 'drizzle-orm';
+import { inArray } from "drizzle-orm";
 
 // Correct way to query array of values
 const query = db.select()
@@ -181,10 +195,8 @@ const query = db.select()
 const query = db.select()
   .from(table)
   .where(sql`${table.id} = ANY(${ids})`);
-```
 
 ### 4. Type-Safe Pattern
-```typescript
 // Define proper types for your data
 interface QueryOptions {
   exercise?: string;
@@ -205,7 +217,6 @@ function buildQuery(options: QueryOptions) {
   
   return query;
 }
-```
 
 ### Common Fixes for TypeScript Errors
 
@@ -232,7 +243,6 @@ function buildQuery(options: QueryOptions) {
 #### 1. Missing 'where' and 'limit' Properties
 This common error occurs when TypeScript loses type inference in query chains:
 
-```typescript
 // ❌ Incorrect - Type inference is lost
 let query = db.select().from(table);
 if (condition) {
@@ -249,12 +259,11 @@ const finalQuery = whereQuery.limit(10);
 
 // ✅ Alternative - Type assertion
 let query = db.select().from(table) as typeof baseQuery;
-```
 
 #### 2. Proper Query Building Pattern
-```typescript
+import { db } from '../db';
 import { eq } from 'drizzle-orm';
-import { type PgSelect } from 'drizzle-orm/pg-core';
+import { type PgSelect } from "drizzle-orm/pg-core";
 
 // Define interface for your options
 interface QueryOptions {
@@ -264,7 +273,6 @@ interface QueryOptions {
 
 // Type-safe query builder function
 function buildWorkoutQuery(
-  db: Database,
   table: typeof progressTable,
   options: QueryOptions
 ): PgSelect {
@@ -284,13 +292,11 @@ function buildWorkoutQuery(
   
   return query;
 }
-```
 
 #### 3. Real-World Example: Progress Tracking
-```typescript
-import { eq } from 'drizzle-orm';
-import { progressTable } from './schema';
-import type { Database } from './db';
+import { eq } from "drizzle-orm";
+import { progressTable } from "../db/schema/application";
+import { db } from '../db';
 
 interface ProgressQueryOptions {
   exerciseName?: string;
@@ -298,7 +304,6 @@ interface ProgressQueryOptions {
 }
 
 export async function getProgress(
-  db: Database,
   options: ProgressQueryOptions
 ) {
   // ✅ Correct implementation
@@ -318,13 +323,11 @@ export async function getProgress(
     
   return await withLimit;
 }
-```
 
 #### 4. Real-World Example: Workout History
-```typescript
-import { eq } from 'drizzle-orm';
-import { exerciseRecordsTable } from './schema';
-import type { Database } from './db';
+import { eq } from "drizzle-orm";
+import { exerciseRecordsTable } from "../db/schema/application";
+import { db } from '../db';
 
 interface WorkoutHistoryOptions {
   exerciseId?: number;
@@ -332,7 +335,6 @@ interface WorkoutHistoryOptions {
 }
 
 export async function listWorkoutHistory(
-  db: Database,
   options: WorkoutHistoryOptions
 ) {
   // ✅ Correct implementation with type preservation
@@ -353,7 +355,6 @@ export async function listWorkoutHistory(
     
   return await withLimit;
 }
-```
 
 ### Common Type Error Fixes
 
@@ -363,18 +364,15 @@ export async function listWorkoutHistory(
    - Use `$dynamic()` for dynamic queries
 
 2. Import Issues:
-```typescript
 // ✅ Correct imports for PostgreSQL
-import { eq, and, or } from 'drizzle-orm';
-import type { PgSelect } from 'drizzle-orm/pg-core';
+import { eq, and, or } from "drizzle-orm";
+import type { PgSelect } from "drizzle-orm/pg-core";
 
 // Types for type safety
 import type { InferSelectModel } from 'drizzle-orm';
-import type { Database } from './db';
-```
+import { db } from '../db';
 
 3. Type Definitions:
-```typescript
 // Define table types
 type Progress = InferSelectModel<typeof progressTable>;
 type ExerciseRecord = InferSelectModel<typeof exerciseRecordsTable>;
@@ -384,7 +382,6 @@ interface QueryOptions<T> {
   where?: Partial<T>;
   limit?: number;
 }
-```
 
 4. Error Prevention Checklist:
    - Import operators explicitly (`eq`, `and`, etc.)
@@ -397,27 +394,106 @@ interface QueryOptions<T> {
 These patterns will help prevent common TypeScript errors while working with Drizzle ORM, especially in workout tracking and progress monitoring systems.
 </drizzle_guide>
 
-Handler to implement: {{function_name}}
-
-Return output within <handler> tag. Generate only the handler function and table imports from drizzle schema, omit pre- and post-processors.
-Handler code should contain just explicit logic such as database operations, performing calculations etc.
 """.strip()
 
 
-class HandlerInput(TypedDict):
-    typespec_definitions: str
-    drizzle_schema: str
-    function_name: str
+FIX_PROMPT = """
+Make sure to address following TypeScript compilation errors:
+<errors>
+{{errors}}
+</errors>
 
+Verify absence of reserved keywords in property names, type names, and function names.
+Return fixed complete TypeScript definition encompassed with <typescript> tag.
+"""
 
-class HandlerOutput(TypedDict):
+@dataclass
+class HandlerOutput:
     handler: str
+    feedback: CompileResult
+
+    @property
+    def error_or_none(self) -> str | None:
+        return self.feedback["stdout"] if self.feedback["exit_code"] != 0 else None
 
 
-def parse_output(output: str) -> HandlerOutput:
-    pattern = re.compile(r"<handler>(.*?)</handler>", re.DOTALL)
-    match = pattern.search(output)
-    if match is None:
-        raise ValueError("Failed to parse output")
-    handler = match.group(1).strip()
-    return HandlerOutput(handler=handler)
+@dataclass
+class HandlerData:
+    messages: list[MessageParam]
+    #function_name: str
+    output: HandlerOutput | Exception
+
+class HandlerTaskNode(TaskNode[HandlerData, list[MessageParam]]):
+    @property
+    def run_args(self) -> list[MessageParam]:
+        fix_template = typescript_jinja_env.from_string(FIX_PROMPT)
+        messages = []
+        for node in self.get_trajectory():
+            messages.extend(node.data.messages)
+            content = None
+            match node.data.output:
+                case HandlerOutput(feedback={"exit_code": exit_code, "stdout": stdout}) if exit_code != 0:
+                    content = fix_template.render(errors=stdout)
+                case HandlerOutput():
+                    continue
+                case Exception() as e:
+                    content = fix_template.render(errors=str(e))
+            if content:
+                messages.append({"role": "user", "content": content})
+        return messages #, self.data.function_name            
+
+    @staticmethod
+    @observe(capture_input=False, capture_output=False)
+    def run(input: list[MessageParam], *args, **kwargs) -> HandlerData:
+        response = typescript_client.call_anthropic(
+            model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+            max_tokens=8192,
+            messages=input,
+        )
+        try:
+            handler = HandlerTaskNode.parse_output(response.content[0].text)
+            #feedback = typescript_compiler.compile_typescript({f"src/handlers/{kwargs['function_name']}.ts": handler})
+            handler_filename = str(uuid.uuid4())
+            feedback = typescript_compiler.compile_typescript({f"src/handlers/{kwargs['function_name']}.ts": handler, 
+                                                               "src/common/schema.ts": kwargs['typescript_schema'], 
+                                                               "src/db/schema/application.ts": kwargs['drizzle_schema']})
+            output = HandlerOutput(
+                handler=handler,
+                feedback=feedback,
+            )
+        except Exception as e:
+            output = e
+        messages = [{"role": "assistant", "content": response.content[0].text}]
+        #return HandlerData(messages=messages, output=output, function_name=kwargs['function_name'])
+        return HandlerData(messages=messages, output=output)
+    @property
+    def is_successful(self) -> bool:
+        return (
+            not isinstance(self.data.output, Exception)
+            and self.data.output.feedback["exit_code"] == 0
+        )
+    
+    @staticmethod
+    @contextmanager
+    def platform(client: TracingClient, compiler: Compiler, jinja_env: jinja2.Environment):
+        try:
+            global typescript_client
+            global typescript_compiler
+            global typescript_jinja_env
+            typescript_client = client
+            typescript_compiler = compiler
+            typescript_jinja_env = jinja_env
+            yield
+        finally:
+            del typescript_client
+            del typescript_compiler
+            del typescript_jinja_env
+    
+    @staticmethod
+    def parse_output(output: str) -> HandlerOutput:
+        pattern = re.compile(r"<handler>(.*?)</handler>", re.DOTALL)
+        match = pattern.search(output)
+        if match is None:
+            raise ValueError("Failed to parse output")
+        handler = match.group(1).strip()
+        return handler
