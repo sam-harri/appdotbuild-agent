@@ -9,13 +9,12 @@ from application import Application
 
 DATASET_DIR = "evals/dataset.min"
 SCHEMA_SUFFIXES = {
-    "_typescript_schema.ts": "typescript_schema",
-    "_drizzle_schema.ts": "drizzle_schema",
-    "_typespec_schema.tsp": "typespec_definitions"
+    "_app.tsp": "typespec_definitions",
+    "_app.ts": "typescript_schema",
+    "_db.ts": "drizzle_schema"
 }
 
 def evaluate_handlers_generation() -> float:
-    # Initialize core components
     try:
         client = AnthropicBedrock(aws_profile="dev", aws_region="us-west-2")
         compiler = Compiler("botbuild/tsp_compiler", "botbuild/app_schema")
@@ -30,10 +29,10 @@ def evaluate_handlers_generation() -> float:
         return 0.0
 
     successful_compilations = 0
-    total_attempts = 3
+    total_attempts = 10
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        application = Application(client, compiler, "templates", tmpdir, branch_factor=1, max_depth=1, max_workers=5)
+        application = Application(client, compiler, "templates", tmpdir, branch_factor=1, max_depth=1, max_workers=1)
 
         for i in range(total_attempts):
             try:
@@ -49,9 +48,9 @@ def evaluate_handlers_generation() -> float:
                     drizzle_schema=test_case["drizzle_schema"]
                 )
                 
-                # Check compilation results
                 all_handlers_compiled = True
                 for name, handler in handlers.items():
+                    #print(handler)
                     if handler.error_output is not None:
                         print(f"Handler {name} compilation failed:")
                         print(handler.error_output)
