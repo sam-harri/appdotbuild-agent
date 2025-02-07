@@ -33,20 +33,20 @@ def evaluate_handlers_generation() -> float:
     total_attempts = 3
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        application = Application(client, compiler, "templates", tmpdir)
+        application = Application(client, compiler, "templates", tmpdir, branch_factor=1, max_depth=1, max_workers=5)
 
         for i in range(total_attempts):
             try:
                 test_case = list(data_mapping.values())[i % len(data_mapping)]
                 
-                print(f"\nAttempt {i + 1}/{total_attempts}:")
+                print(f"\nTest case {i + 1}/{total_attempts}:")
                 
                 llm_functions = re.compile(r'@llm_func\(\d+\)\s*(\w+)\s*\(', re.DOTALL).findall(test_case["typespec_definitions"])
                 handlers = application._make_handlers(
-                    llm_functions,
-                    test_case["typespec_definitions"],
-                    test_case["typescript_schema"],
-                    test_case["drizzle_schema"]
+                    llm_functions=llm_functions,
+                    typespec_definitions=test_case["typespec_definitions"],
+                    typescript_schema=test_case["typescript_schema"],
+                    drizzle_schema=test_case["drizzle_schema"]
                 )
                 
                 # Check compilation results

@@ -64,7 +64,8 @@ class ApplicationOut:
 
 
 class Application:
-    def __init__(self, client: AnthropicBedrock, compiler: Compiler, template_dir: str = "templates", output_dir: str = "app_output"):
+    def __init__(self, client: AnthropicBedrock, compiler: Compiler, template_dir: str = "templates", output_dir: str = "app_output", 
+                 branch_factor: int = 2, max_depth: int = 4, max_workers: int = 5):
         self.client = TracingClient(client)
         self.compiler = compiler
         self.jinja_env = jinja2.Environment()
@@ -72,6 +73,9 @@ class Application:
         self.iteration = 0
         self.output_dir = os.path.join(output_dir, "generated")
         self._model = "anthropic.claude-3-5-sonnet-20241022-v2:0"
+        self.BRANCH_FACTOR = branch_factor
+        self.MAX_DEPTH = max_depth
+        self.MAX_WORKERS = max_workers
     
     @observe(capture_output=False)
     def create_bot(self, application_description: str, bot_id: str | None = None):
@@ -157,14 +161,12 @@ class Application:
 
     @observe(capture_input=False, capture_output=False)
     def _make_typescript_schema(self, typespec_definitions: str):
-        BRANCH_FACTOR, MAX_DEPTH, MAX_WORKERS = 2, 4, 5
-
         content = self.jinja_env.from_string(typescript.PROMPT).render(typespec_definitions=typespec_definitions)
         message = {"role": "user", "content": content}
         with typescript.TypescriptTaskNode.platform(self.client, self.compiler, self.jinja_env):
             ts_data = typescript.TypescriptTaskNode.run([message])
             ts_root = typescript.TypescriptTaskNode(ts_data)
-            ts_solution = common.bfs(ts_root, MAX_DEPTH, BRANCH_FACTOR, MAX_WORKERS)
+            ts_solution = common.bfs(ts_root, self.MAX_DEPTH, self.BRANCH_FACTOR, self.MAX_WORKERS)
         match ts_solution.data.output:
             case Exception() as e:
                 return TypescriptOut(None, None, None, str(e))
@@ -189,14 +191,12 @@ class Application:
     
     @observe(capture_input=False, capture_output=False)
     def _make_drizzle(self, typespec_definitions: str):
-        BRANCH_FACTOR, MAX_DEPTH, MAX_WORKERS = 2, 4, 5
-
         content = self.jinja_env.from_string(drizzle.PROMPT).render(typespec_definitions=typespec_definitions)
         message = {"role": "user", "content": content}
         with drizzle.DrizzleTaskNode.platform(self.client, self.compiler, self.jinja_env):
             dzl_data = drizzle.DrizzleTaskNode.run([message])
             dzl_root = drizzle.DrizzleTaskNode(dzl_data)
-            dzl_solution = common.bfs(dzl_root, MAX_DEPTH, BRANCH_FACTOR, MAX_WORKERS)
+            dzl_solution = common.bfs(dzl_root, self.MAX_DEPTH, self.BRANCH_FACTOR, self.MAX_WORKERS)
         match dzl_solution.data.output:
             case Exception() as e:
                 return DrizzleOut(None, None, str(e))
@@ -217,9 +217,9 @@ class Application:
             case output:
                 return RouterOut(output.functions, None)
     
-    @staticmethod
     @observe(capture_input=False, capture_output=False)
     def _make_handler(
+        self,
         content: str,
         function_name: str,
         typespec_definitions: str,
@@ -228,7 +228,6 @@ class Application:
         *args,
         **kwargs,
     ) -> handlers.HandlerTaskNode:
-        BRANCH_FACTOR, MAX_DEPTH, MAX_WORKERS = 2, 4, 5
         prompt_params = {
             "function_name": function_name,
             "typespec_schema": typespec_definitions,
@@ -238,17 +237,16 @@ class Application:
         message = {"role": "user", "content": content}
         output = handlers.HandlerTaskNode.run([message], **prompt_params)
         root_node = handlers.HandlerTaskNode(output)
-        solution = common.bfs(root_node, MAX_DEPTH, BRANCH_FACTOR, MAX_WORKERS, **prompt_params)
+        solution = common.bfs(root_node, self.MAX_DEPTH, self.BRANCH_FACTOR, self.MAX_WORKERS, **prompt_params)
         return solution
     
     @observe(capture_input=False, capture_output=False)
     def _make_handlers(self, llm_functions: list[str], typespec_definitions: str, typescript_schema: str, drizzle_schema: str):
-        MAX_WORKERS = 5
         trace_id = langfuse_context.get_current_trace_id()
         observation_id = langfuse_context.get_current_observation_id()
         results: dict[str, HandlerOut] = {}
         with handlers.HandlerTaskNode.platform(self.client, self.compiler, self.jinja_env):
-            with concurrent.futures.ThreadPoolExecutor(MAX_WORKERS) as executor:
+            with concurrent.futures.ThreadPoolExecutor(self.MAX_WORKERS) as executor:
                 future_to_handler: dict[concurrent.futures.Future[handlers.HandlerTaskNode], str] = {}
                 for function_name in llm_functions:
                     prompt_params = {
@@ -259,7 +257,7 @@ class Application:
                     }
                     content = self.jinja_env.from_string(handlers.PROMPT).render(**prompt_params)
                     future_to_handler[executor.submit(
-                        Application._make_handler,
+                        self._make_handler,
                         content,
                         function_name,
                         typespec_definitions,
