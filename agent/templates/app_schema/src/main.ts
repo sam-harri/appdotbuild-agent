@@ -20,6 +20,13 @@ const mainHandler = async (ctx: typeof Context) => {
             await putMessage(ctx.from!.id.toString(), 'assistant', result[0].content);
         }
     }
+    else {
+        const handlerDescriptions = Object.keys(handlers).map(handler =>
+            handler.split(/(?=[A-Z])/).join(' ').toLowerCase()).join(', ').replace('handler', '').replace('handler, ', '.');
+        const message = 'I don\'t know how to respond to that. Ask me one of the following: ' + handlerDescriptions;
+        ctx.reply(message);
+        await putMessage(ctx.from!.id.toString(), 'assistant', message);
+    }
 }
 
 const bot = new Telegraf(process.env['TELEGRAM_BOT_TOKEN']);
