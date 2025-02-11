@@ -9,9 +9,8 @@ from compiler.core import Compiler
 from tracing_client import TracingClient
 from core.interpolator import Interpolator
 from langfuse.decorators import langfuse_context, observe
-from policies import common, handlers, typespec, drizzle, typescript, router, app_testcases
+from policies import common, handlers, typespec, drizzle, typescript, router, app_testcases, handler_tests
 from core import feature_flags
-
 
 @dataclass
 class TypespecOut:
@@ -122,10 +121,16 @@ class Application:
         if router.error_output is not None:
             raise Exception(f"Failed to generate router: {router.error_output}")
 
-        # TODO: pass gherkin to handlers to generate tests
+        if feature_flags.gherkin:
+            print("Compiling Handler Tests...")
+            handler_interfaces, handler_tests = self._make_handler_tests(llm_functions, typespec_definitions, gherkin.gherkin, typescript_schema_definitions, drizzle_schema)
+        else:
+            handler_tests = {}
+            handler_interfaces = {}
+            
         print("Compiling Handlers...")
-        handlers = self._make_handlers(llm_functions, typespec_definitions, typescript_schema_definitions, drizzle_schema)
-
+        handlers = self._make_handlers(llm_functions, handler_interfaces, handler_tests, typespec_definitions, typescript_schema_definitions, drizzle_schema)
+        
         langfuse_context.update_current_observation(
             output = {
                 "typespec": typespec.__dict__,
@@ -133,6 +138,7 @@ class Application:
                 "drizzle": drizzle.__dict__,
                 "router": router.__dict__,
                 "handlers": {k: v.__dict__ for k, v in handlers.items()},
+                "handler_tests": {k: v.__dict__ for k, v in handler_tests.items()},
                 "gherkin": gherkin.__dict__,
             },
             metadata = {
@@ -141,15 +147,16 @@ class Application:
                 "drizzle_ok": drizzle.error_output is None,
                 "router_ok": router.error_output is None,
                 "all_handlers_ok": all(handler.error_output is None for handler in handlers.values()),
+                "all_handler_tests_ok": all(handler_test.error_output is None for handler_test in handler_tests.values()),
                 "gherkin_ok": gherkin.error_output is None,
             },
         )
 
         print("Generating Application...")
-        application = self._make_application(typespec_definitions, typescript_schema_definitions, typescript_type_names, drizzle_schema, router.functions, handlers, gherkin.gherkin)
+        application = self._make_application(typespec_definitions, typescript_schema_definitions, typescript_type_names, drizzle_schema, router.functions, handlers, handler_tests, gherkin.gherkin)
         return ApplicationOut(typespec, drizzle, router, handlers, typescript_schema, gherkin, application)
 
-    def _make_application(self, typespec_definitions: str, typescript_schema: str, typescript_type_names: list[str], drizzle_schema: str, user_functions: list[dict], handlers: dict[str, HandlerOut], gherkin: str):
+    def _make_application(self, typespec_definitions: str, typescript_schema: str, typescript_type_names: list[str], drizzle_schema: str, user_functions: list[dict], handlers: dict[str, HandlerOut], handler_tests: dict[str, HandlerOut], gherkin: str):
         self.iteration += 1
         self.generation_dir = os.path.join(self.output_dir, f"generation-{self.iteration}")
 
@@ -174,8 +181,8 @@ class Application:
         interpolator = Interpolator(self.generation_dir)
 
         raw_handlers = {k: v.handler for k, v in handlers.items()}
-
-        return interpolator.interpolate_all(raw_handlers, typescript_type_names, user_functions, gherkin)
+        handler_tests = {k: v.handler_tests for k, v in handler_tests.items()}
+        return interpolator.interpolate_all(raw_handlers, handler_tests, typescript_type_names, user_functions, gherkin)
 
     @observe(capture_input=False, capture_output=False)
     def _make_typescript_schema(self, typespec_definitions: str):
@@ -254,6 +261,8 @@ class Application:
         self,
         content: str,
         function_name: str,
+        handler_interfaces: str,
+        handler_tests: str,
         typespec_definitions: str,
         typescript_schema: str,
         drizzle_schema: str,
@@ -262,6 +271,8 @@ class Application:
     ) -> handlers.HandlerTaskNode:
         prompt_params = {
             "function_name": function_name,
+            "handler_interfaces": handler_interfaces,
+            "handler_tests": handler_tests,
             "typespec_schema": typespec_definitions,
             "typescript_schema": typescript_schema,
             "drizzle_schema": drizzle_schema,
@@ -273,7 +284,11 @@ class Application:
         return solution
     
     @observe(capture_input=False, capture_output=False)
-    def _make_handlers(self, llm_functions: list[str], typespec_definitions: str, typescript_schema: str, drizzle_schema: str):
+    def _make_handler_tests_and_interfaces(self, llm_functions: list[str], test_cases: str, typescript_schema: str, drizzle_schema: str):
+        raise NotImplementedError("Not implemented")
+
+    @observe(capture_input=False, capture_output=False)
+    def _make_handler_tests(self, llm_functions: list[str], typespec_definitions: str, test_cases: str, typescript_schema: str, drizzle_schema: str):
         trace_id = langfuse_context.get_current_trace_id()
         observation_id = langfuse_context.get_current_observation_id()
         results: dict[str, HandlerOut] = {}
@@ -281,17 +296,59 @@ class Application:
             with concurrent.futures.ThreadPoolExecutor(self.MAX_WORKERS) as executor:
                 future_to_handler: dict[concurrent.futures.Future[handlers.HandlerTaskNode], str] = {}
                 for function_name in llm_functions:
-                    prompt_params = {
+
+                    test_prompt_params = {
                         "function_name": function_name,
                         "typespec_schema": typespec_definitions,
                         "typescript_schema": typescript_schema,
                         "drizzle_schema": drizzle_schema,
                     }
-                    content = self.jinja_env.from_string(handlers.PROMPT).render(**prompt_params)
+                    content = self.jinja_env.from_string(handler_tests.PROMPT).render(**test_prompt_params)
+                    future_to_handler[executor.submit(
+                        self._make_handler_tests_and_interfaces,
+                        content,
+                        function_name,
+                        test_cases,
+                        typescript_schema,
+                        drizzle_schema,
+                        langfuse_parent_trace_id=trace_id,
+                        langfuse_parent_observation_id=observation_id,
+                    )] = function_name
+                for future in concurrent.futures.as_completed(future_to_handler):
+                    function_name, result = future_to_handler[future], future.result()
+                    match result.data.output:
+                        case Exception() as e:
+                            results[function_name] = HandlerOut(None, str(e))
+                        case output:
+                            results[function_name] = HandlerOut(output.handler_tests, output.handler_interfaces, None)
+        return results
+    
+    @observe(capture_input=False, capture_output=False)
+    def _make_handlers(self, llm_functions: list[str], handler_interfaces: dict[str], handler_tests: dict[str], typespec_definitions: str, typescript_schema: str, drizzle_schema: str):
+        trace_id = langfuse_context.get_current_trace_id()
+        observation_id = langfuse_context.get_current_observation_id()
+        results: dict[str, HandlerOut] = {}
+        with handlers.HandlerTaskNode.platform(self.client, self.compiler, self.jinja_env):
+            with concurrent.futures.ThreadPoolExecutor(self.MAX_WORKERS) as executor:
+                future_to_handler: dict[concurrent.futures.Future[handlers.HandlerTaskNode], str] = {}
+                for function_name in llm_functions:
+                    handler_interface_set = handler_interfaces.get(function_name, None)
+                    handler_test_suite = handler_tests.get(function_name, None)
+                    handler_prompt_params = {
+                        "function_name": function_name,
+                        "handler_interfaces": handler_interface_set,
+                        "handler_tests": handler_test_suite,
+                        "typespec_schema": typespec_definitions,
+                        "typescript_schema": typescript_schema,
+                        "drizzle_schema": drizzle_schema,
+                    }
+                    content = self.jinja_env.from_string(handlers.PROMPT).render(**handler_prompt_params)
                     future_to_handler[executor.submit(
                         self._make_handler,
                         content,
                         function_name,
+                        handler_interfaces,
+                        handler_tests,
                         typespec_definitions,
                         typescript_schema,
                         drizzle_schema,

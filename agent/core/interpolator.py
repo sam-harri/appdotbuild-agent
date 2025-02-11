@@ -1,6 +1,8 @@
 import os
 import jinja2
 
+from core import feature_flags
+
 class Interpolator:
     def __init__(self, root_dir: str):
         self.template_dir = os.path.join(root_dir, 'interpolation')
@@ -30,6 +32,16 @@ class Interpolator:
         self._interpolate(params, "handler.tpl", f"handlers/{handler_snake_name}.ts")
         return handler_snake_name
     
+    def _interpolate_handler_test(self, handler_name: str, handler_tests: str):
+        params = {
+            "handler_name": handler_name,
+            "handler_tests": handler_tests
+        }
+        handler_snake_name = self._interpolate_module_name(handler_name)
+        handler_test_name = f"{handler_snake_name}.test"
+        self._interpolate(params, "handler_test.tpl", f"tests/handlers/{handler_test_name}.ts")
+        return handler_test_name
+    
     def _interpolate_index(self, handlers: dict):
         params = {
             "handlers": handlers,
@@ -48,8 +60,15 @@ class Interpolator:
         }
         self._interpolate(params, "testcases.tpl", "tests/features/application.feature")
 
-    def interpolate_all(self, handlers: dict, typescript_schema_type_names: list[str], functions: list[dict], gherkin: str):
+    def interpolate_all(self, handlers: dict, handler_tests: dict, typescript_schema_type_names: list[str], functions: list[dict], gherkin: str):
         processed_handlers = {}
+        
+        for handler_name in handlers.keys():
+            handler = handlers[handler_name]
+            if feature_flags.gherkin:
+                handler_test_suite = handler_tests[handler_name]
+                module = self._interpolate_handler_test(handler_name, handler_test_suite, typescript_schema_type_names)
+        
         for handler_name in handlers.keys():
             handler = handlers[handler_name]
             module = self._interpolate_handler(handler_name, handler, typescript_schema_type_names)
