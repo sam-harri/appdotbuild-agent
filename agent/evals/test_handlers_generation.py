@@ -45,7 +45,9 @@ def evaluate_handlers_generation() -> float:
                     llm_functions=llm_functions,
                     typespec_definitions=test_case["typespec_definitions"],
                     typescript_schema=test_case["typescript_schema"],
-                    drizzle_schema=test_case["drizzle_schema"]
+                    drizzle_schema=test_case["drizzle_schema"],
+                    handler_interfaces={},
+                    handler_tests={}
                 )
                 
                 all_handlers_compiled = True
