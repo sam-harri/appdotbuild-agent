@@ -7,7 +7,9 @@ import docker
 import docker.models
 from docker.errors import APIError
 import docker.models.containers
+from logging import getLogger
 
+logger = getLogger(__name__)
 
 class CompileResult(TypedDict):
     exit_code: int
@@ -36,17 +38,17 @@ class Compiler:
         result = self.exec_demux(container, command)
         container.remove(force=True)
         return result
-    
+
     def compile_gherkin(self, testcases: str):
         with self.app_container() as container:
             schema_path, schema = "testcases.feature", shlex.quote(testcases)
             command = [
                 "sh",
-                "-c", 
+                "-c",
                 f"echo {schema} > {schema_path} && npx gherkin-lint {schema_path} -c gherkin-lint.config.json"
             ]
             return self.exec_demux(container, command)
-    
+
     def compile_drizzle(self, schema: str):
         with self.tmp_network() as network, self.tmp_postgres() as postgres, self.app_container() as container:
             network.connect(postgres)
@@ -56,26 +58,29 @@ class Compiler:
             if result["exit_code"] != 0:
                 return result
             return self.exec_demux(container, ["npx", "drizzle-kit", "push", "--force"])
-        
+
     @overload
     def compile_typescript(self, files: dict[str, str]) -> CompileResult:
         ...
-    
+
     @overload
     def compile_typescript(self, files: dict[str, str], cmds: list[list[str]]) -> list[CompileResult]:
         ...
-    
+
     def compile_typescript(self, files: dict[str, str], cmds: list[list[str]] = None) -> CompileResult | list[CompileResult]:
         with self.tmp_network() as network, self.tmp_postgres() as postgres, self.app_container() as container:
             network.connect(postgres)
             network.connect(container)
             Compiler.copy_files(container, files)
             result = self.exec_demux(container, ["npx", "tsc", "--noEmit"])
+            if result["exit_code"]:
+                error = result["stderr"] or result["stdout"]
+                logger.info(f"Typescript compilation failed: {error}")
             if cmds is None:
                 return result
             cmds = [self.exec_demux(container, cmd) for cmd in cmds]
             return [result, *cmds]
-    
+
     @staticmethod
     def copy_files(container: docker.models.containers.Container, files: dict[str, str]):
         for path, content in files.items():
@@ -88,20 +93,20 @@ class Compiler:
             )
             if exit_code != 0:
                 raise ValueError(f"Failed to write file {path}")
-    
+
     @staticmethod
     def exec_demux(container: docker.models.containers.Container, command: list[str]) -> CompileResult:
         exit_code, (stdout, stderr) = container.exec_run(
             command,
             demux=True,
-            environment={"NO_COLOR": "1", "FORCE_COLOR": "0"},
+            environment={"NO_COLOR": "1", "FORCE_COLOR": "0", "APP_DATABASE_URL": "postgres://postgres:postgres@postgres:5432/postgres"},
         )
         return CompileResult(
             exit_code=exit_code,
             stdout=stdout.decode("utf-8") if stdout else None,
             stderr=stderr.decode("utf-8") if stderr else None,
         )
-    
+
     @contextmanager
     def app_container(self):
         container = self.client.containers.run(
@@ -113,7 +118,7 @@ class Compiler:
             yield container
         finally:
             container.remove(force=True)
-    
+
     @contextmanager
     def tmp_network(self, network_name: str | None = None, driver: str = "bridge"):
         network_name = network_name or uuid.uuid4().hex
@@ -122,7 +127,7 @@ class Compiler:
             yield network
         finally:
             network.remove()
-    
+
     @contextmanager
     def tmp_postgres(self):
         container = self.client.containers.run(

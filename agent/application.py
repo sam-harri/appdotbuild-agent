@@ -151,10 +151,10 @@ class Application:
 
         print("Compiling Handler Tests...")
         handler_test_dict = self._make_handler_tests(typescript_functions, typescript_schema_definitions, drizzle_schema)
-            
+
         print("Compiling Handlers...")
         handlers = self._make_handlers(typescript_functions, handler_test_dict, typespec_definitions, typescript_schema_definitions, drizzle_schema)
-        
+
         langfuse_context.update_current_observation(
             output = {
                 "refined_description": app_prompt.__dict__,
@@ -310,7 +310,7 @@ class Application:
         test_root = handler_tests.HandlerTestTaskNode(test_data)
         test_solution = common.bfs(test_root, self.MAX_DEPTH, self.BRANCH_FACTOR, self.MAX_WORKERS, **prompt_params)
         return test_solution
-    
+
     @observe(capture_input=False, capture_output=False)
     def _make_handler_tests(
         self,
@@ -384,7 +384,7 @@ class Application:
         root_node = handlers.HandlerTaskNode(output)
         solution = common.bfs(root_node, self.MAX_DEPTH, self.BRANCH_FACTOR, self.MAX_WORKERS, **prompt_params)
         return solution
-    
+
     @observe(capture_input=False, capture_output=False)
     def _make_handlers(self, llm_functions: list[typescript.FunctionDeclaration], handler_tests: dict[str, HandlerTestsOut], typespec_definitions: str, typescript_schema: str, drizzle_schema: str):
         trace_id = langfuse_context.get_current_trace_id()

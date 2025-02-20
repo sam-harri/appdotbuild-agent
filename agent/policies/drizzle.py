@@ -91,7 +91,7 @@ class DrizzleTaskNode(TaskNode[DrizzleData, list[MessageParam]]):
                     continue
             if content:
                 messages.append({"role": "user", "content": content})
-        return messages            
+        return messages
 
     @staticmethod
     @observe(capture_input=False, capture_output=False)
@@ -115,7 +115,7 @@ class DrizzleTaskNode(TaskNode[DrizzleData, list[MessageParam]]):
         messages.append({"role": "assistant", "content": response.content[0].text})
         langfuse_context.update_current_observation(output=output)
         return DrizzleData(messages=messages, output=output)
-    
+
     @property
     def is_successful(self) -> bool:
         return (
@@ -123,7 +123,7 @@ class DrizzleTaskNode(TaskNode[DrizzleData, list[MessageParam]]):
             and self.data.output.feedback["exit_code"] == 0
             and self.data.output.feedback["stderr"] is None
         )
-    
+
     @staticmethod
     @contextmanager
     def platform(client: TracingClient, compiler: Compiler, jinja_env: jinja2.Environment):
@@ -139,7 +139,7 @@ class DrizzleTaskNode(TaskNode[DrizzleData, list[MessageParam]]):
             del drizzle_client
             del drizzle_compiler
             del drizzle_jinja_env
-    
+
     @staticmethod
     def parse_output(output: str) -> tuple[str, str]:
         pattern = re.compile(
