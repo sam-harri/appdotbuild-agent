@@ -149,12 +149,11 @@ class Application:
         if router.error_output is not None:
             raise Exception(f"Failed to generate router: {router.error_output}")
 
-        if feature_flags.handler_tests:
-            print("Compiling Handler Tests...")
-            handler_tests = self._make_handler_tests(typescript_functions, typescript_schema_definitions, drizzle_schema)
+        print("Compiling Handler Tests...")
+        handler_test_dict = self._make_handler_tests(typescript_functions, typescript_schema_definitions, drizzle_schema)
             
         print("Compiling Handlers...")
-        handlers = self._make_handlers(typescript_functions, handler_tests, typespec_definitions, typescript_schema_definitions, drizzle_schema)
+        handlers = self._make_handlers(typescript_functions, handler_test_dict, typespec_definitions, typescript_schema_definitions, drizzle_schema)
         
         langfuse_context.update_current_observation(
             output = {
@@ -164,7 +163,7 @@ class Application:
                 "drizzle": drizzle.__dict__,
                 "router": router.__dict__,
                 "handlers": {k: v.__dict__ for k, v in handlers.items()},
-                "handler_tests": {k: v.__dict__ for k, v in handler_tests.items()},
+                "handler_tests": {k: v.__dict__ for k, v in handler_test_dict.items()},
                 "gherkin": gherkin.__dict__,
             },
             metadata = {
@@ -174,7 +173,7 @@ class Application:
                 "drizzle_ok": drizzle.error_output is None,
                 "router_ok": router.error_output is None,
                 "all_handlers_ok": all(handler.error_output is None for handler in handlers.values()),
-                "all_handler_tests_ok": all(handler_test.error_output is None for handler_test in handler_tests.values()),
+                "all_handler_tests_ok": all(handler_test.error_output is None for handler_test in handler_test_dict.values()),
                 "gherkin_ok": gherkin.error_output is None,
             },
         )

@@ -7,4 +7,3 @@ import os
 
 gherkin = bool(os.getenv("GHERKIN", False))
 refine_initial_prompt = bool(os.getenv("REFINE_INITIAL_PROMPT", False))
-handler_tests: bool = bool(os.getenv("HANDLER_TESTS", True))
