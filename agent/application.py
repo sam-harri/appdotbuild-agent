@@ -9,7 +9,7 @@ from compiler.core import Compiler
 from tracing_client import TracingClient
 from core.interpolator import Interpolator
 from langfuse.decorators import langfuse_context, observe
-from policies import common, handlers, typespec, drizzle, typescript, router, app_testcases, handler_tests
+from policies import common, handlers, typespec, drizzle, typescript, router, app_testcases, handler_tests, refine
 from core import feature_flags
 
 @dataclass
@@ -59,7 +59,14 @@ class HandlerOut:
 
 
 @dataclass
+class RefineOut:
+    refined_description: str
+    error_output: str | None
+
+
+@dataclass
 class ApplicationOut:
+    refined_description: RefineOut
     typespec: TypespecOut
     drizzle: DrizzleOut
     router: RouterOut
@@ -71,7 +78,7 @@ class ApplicationOut:
 
 
 class Application:
-    def __init__(self, client: AnthropicBedrock, compiler: Compiler, template_dir: str = "templates", output_dir: str = "app_output", 
+    def __init__(self, client: AnthropicBedrock, compiler: Compiler, template_dir: str = "templates", output_dir: str = "app_output",
                  branch_factor: int = 2, max_depth: int = 4, max_workers: int = 5):
         self.client = TracingClient(client)
         self.compiler = compiler
@@ -83,14 +90,21 @@ class Application:
         self.BRANCH_FACTOR = branch_factor
         self.MAX_DEPTH = max_depth
         self.MAX_WORKERS = max_workers
-    
+
     @observe(capture_output=False)
     def create_bot(self, application_description: str, bot_id: str | None = None):
         if bot_id is not None:
             langfuse_context.update_current_observation(metadata={"bot_id": bot_id})
 
+        if feature_flags.refine_initial_prompt:
+            print("Refining Initial Description...")
+            app_prompt = self._refine_initial_prompt(application_description)
+        else:
+            print("Skipping Initial Description Refinement")
+            app_prompt = RefineOut(application_description, None)
+
         print("Compiling TypeSpec...")
-        typespec = self._make_typespec(application_description)
+        typespec = self._make_typespec(app_prompt.refined_description)
         if typespec.error_output is not None:
             raise Exception(f"Failed to generate typespec: {typespec.error_output}")
         typespec_definitions = typespec.typespec_definitions
@@ -128,12 +142,13 @@ class Application:
         else:
             handler_tests = {}
             handler_interfaces = {}
-            
+
         print("Compiling Handlers...")
         handlers = self._make_handlers(llm_functions, handler_interfaces, handler_tests, typespec_definitions, typescript_schema_definitions, drizzle_schema)
-        
+
         langfuse_context.update_current_observation(
             output = {
+                "refined_description": app_prompt.__dict__,
                 "typespec": typespec.__dict__,
                 "typescript_schema": typescript_schema.__dict__,
                 "drizzle": drizzle.__dict__,
@@ -143,6 +158,7 @@ class Application:
                 "gherkin": gherkin.__dict__,
             },
             metadata = {
+                "refined_description_ok": app_prompt.error_output is None,
                 "typespec_ok": typespec.error_output is None,
                 "typescript_schema_ok": typescript_schema.error_output is None,
                 "drizzle_ok": drizzle.error_output is None,
@@ -156,30 +172,30 @@ class Application:
         print("Generating Application...")
         application = self._make_application(typespec_definitions, typescript_schema_definitions, typescript_type_names, drizzle_schema, router.functions, handlers, handler_tests, gherkin.gherkin)
         trace_id = langfuse_context.get_current_trace_id()
-        return ApplicationOut(typespec, drizzle, router, handlers, typescript_schema, gherkin, application, trace_id)
+        return ApplicationOut(app_prompt, typespec, drizzle, router, handlers, typescript_schema, gherkin, application, trace_id)
 
     def _make_application(self, typespec_definitions: str, typescript_schema: str, typescript_type_names: list[str], drizzle_schema: str, user_functions: list[dict], handlers: dict[str, HandlerOut], handler_tests: dict[str, HandlerOut], gherkin: str):
         self.iteration += 1
         self.generation_dir = os.path.join(self.output_dir, f"generation-{self.iteration}")
 
         copytree(self.template_dir, self.generation_dir, ignore=ignore_patterns('*.pyc', '__pycache__', 'node_modules'))
-        
-        with open(os.path.join(self.generation_dir, "tsp_schema", "main.tsp"), "a") as f:
-            f.write("\n")
-            f.write(typespec_definitions)
-        
 
         with open(os.path.join(self.generation_dir, "tsp_schema", "main.tsp"), "a") as f:
             f.write("\n")
             f.write(typespec_definitions)
-        
+
+
+        with open(os.path.join(self.generation_dir, "tsp_schema", "main.tsp"), "a") as f:
+            f.write("\n")
+            f.write(typespec_definitions)
+
         with open(os.path.join(self.generation_dir, "app_schema/src/db/schema", "application.ts"), "a") as f:
             f.write("\n")
             f.write(drizzle_schema)
 
         with open(os.path.join(self.generation_dir, "app_schema/src/common", "schema.ts"), "a") as f:
             f.write(typescript_schema)
-        
+
         interpolator = Interpolator(self.generation_dir)
 
         raw_handlers = {k: v.handler for k, v in handlers.items()}
@@ -213,7 +229,7 @@ class Application:
                 return GherkinOut(None, None, str(e))
             case output:
                 return GherkinOut(output.reasoning, output.gherkin, output.error_or_none)
-   
+
     @observe(capture_input=False, capture_output=False)
     def _make_typespec(self, application_description: str):
         BRANCH_FACTOR, MAX_DEPTH, MAX_WORKERS = 2, 4, 5
@@ -229,7 +245,7 @@ class Application:
                 return TypespecOut(None, None, None, str(e))
             case output:
                 return TypespecOut(output.reasoning, output.typespec_definitions, output.llm_functions, output.error_or_none)
-    
+
     @observe(capture_input=False, capture_output=False)
     def _make_drizzle(self, typespec_definitions: str):
         content = self.jinja_env.from_string(drizzle.PROMPT).render(typespec_definitions=typespec_definitions)
@@ -257,7 +273,7 @@ class Application:
                 return RouterOut(None, str(e))
             case output:
                 return RouterOut(output.functions, None)
-    
+
     @observe(capture_input=False, capture_output=False)
     def _make_handler(
         self,
@@ -284,7 +300,7 @@ class Application:
         root_node = handlers.HandlerTaskNode(output)
         solution = common.bfs(root_node, self.MAX_DEPTH, self.BRANCH_FACTOR, self.MAX_WORKERS, **prompt_params)
         return solution
-    
+
     @observe(capture_input=False, capture_output=False)
     def _make_handler_tests_and_interfaces(self, llm_functions: list[str], test_cases: str, typescript_schema: str, drizzle_schema: str):
         raise NotImplementedError("Not implemented")
@@ -324,7 +340,7 @@ class Application:
                         case output:
                             results[function_name] = HandlerOut(output.handler_tests, output.handler_interfaces, None)
         return results
-    
+
     @observe(capture_input=False, capture_output=False)
     def _make_handlers(self, llm_functions: list[str], handler_interfaces: dict[str], handler_tests: dict[str], typespec_definitions: str, typescript_schema: str, drizzle_schema: str):
         trace_id = langfuse_context.get_current_trace_id()
@@ -365,3 +381,18 @@ class Application:
                         case output:
                             results[function_name] = HandlerOut(output.handler, None)
         return results
+
+    @observe(capture_input=False, capture_output=False)
+    def _refine_initial_prompt(self, initial_description: str):
+        trace_id = langfuse_context.get_current_trace_id()
+        observation_id = langfuse_context.get_current_observation_id()
+
+        with refine.RefinementTaskNode.platform(self.client, self.jinja_env):
+            refinement_data = refine.RefinementTaskNode.run([{"role": "user",
+                "content": self.jinja_env.from_string(refine.PROMPT).render(application_description=initial_description)
+            }])
+            match refinement_data.output:
+                case Exception() as e:
+                    return RefineOut(initial_description, str(e))
+                case output:
+                    return RefineOut(output.requirements, output.error_or_none)
