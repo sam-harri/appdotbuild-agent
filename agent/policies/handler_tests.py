@@ -1,11 +1,10 @@
 from dataclasses import dataclass
 from contextlib import contextmanager
-import os
 import re
 import jinja2
 from anthropic.types import MessageParam
 from langfuse.decorators import observe, langfuse_context
-from .common import TaskNode
+from .common import TaskNode, PolicyException
 from tracing_client import TracingClient
 from compiler.core import Compiler, CompileResult
 
@@ -419,17 +418,33 @@ Verify absence of reserved keywords in property names, type names, and function 
 Follow original formatting, return <imports> and corrected complete test suite with each test encompassed within <test> tag.
 """
 
-# TODO: Fix this terrible hack
-_current_dir = os.path.dirname(os.path.realpath(__file__))
-_handler_test_tpl_path = os.path.abspath(os.path.join(_current_dir, "../templates/interpolation/handler_test.tpl"))
-with open(_handler_test_tpl_path, "r", encoding="utf-8") as f:
-    HANDLER_TEST_TPL = f.read()
+
+HANDLER_TEST_TPL = """
+import { afterEach, beforeEach, describe } from "bun:test";
+import { resetDB, createDB } from "../../helpers";
+{{handler_function_import}}
+{{imports}}
+
+describe("{{handler_name}}", () => {
+    beforeEach(async () => {
+        await createDB();
+    });
+
+    afterEach(async () => {
+        await resetDB();
+    });
+    {% for test in tests %}
+    {{test|indent(4)}}
+    {% endfor %}
+});
+"""
 
 
 @dataclass
 class HandlerTestOutput:
     imports: str
     tests: list[str]
+    content: str
     feedback: CompileResult
 
     @property
@@ -474,23 +489,27 @@ class HandlerTestTaskNode(TaskNode[HandlerTestData, list[MessageParam]]):
         )
         try:
             imports, tests = HandlerTestTaskNode.parse_output(response.content[0].text)
-            handler_check = typescript_jinja_env.from_string(HANDLER_TEST_TPL).render(
-                handler_name=kwargs['function_name'],
-                handler_function_import=f'import {{ {kwargs["function_name"]} }} from "../../common/schema";',
-                imports=imports,
-                tests=tests,
-            )
+            params = {
+                "function_name": kwargs['function_name'],
+                "handler_function_import": f'import {{ {kwargs["function_name"]} }} from "../../common/schema";',
+                "imports": imports,
+                "tests": tests,
+            }
+            content = typescript_jinja_env.from_string(HANDLER_TEST_TPL).render(**params)
             feedback = typescript_compiler.compile_typescript({
-                f"src/tests/handlers/{kwargs['function_name']}.test.ts": handler_check,
+                f"src/tests/handlers/{kwargs['function_name']}.test.ts": content,
                 "src/common/schema.ts": kwargs['typescript_schema'],
                 "src/db/schema/application.ts": kwargs['drizzle_schema']
             })
+            # TODO: import location should be handled in interpolator bake method
+            params["handler_function_import"] = f'import {{ handle as {kwargs["function_name"]} }} from "../../handlers/{kwargs["function_name"]}.ts";'
             output = HandlerTestOutput(
                 imports=imports,
                 tests=tests,
+                content=typescript_jinja_env.from_string(HANDLER_TEST_TPL).render(**params),
                 feedback=feedback,
             )
-        except Exception as e:
+        except PolicyException as e:
             output = e
         messages = [] if not init else input
         messages.append({"role": "assistant", "content": response.content[0].text})
@@ -525,7 +544,7 @@ class HandlerTestTaskNode(TaskNode[HandlerTestData, list[MessageParam]]):
         pattern = re.compile(r"<imports>(.*?)</imports>", re.DOTALL)
         match = pattern.search(output)
         if match is None:
-            raise ValueError("Failed to parse output, expected <imports> tag")
+            raise PolicyException("Failed to parse output, expected <imports> tag")
         imports = match.group(1).strip()
         pattern = re.compile(r"<test>(.*?)</test>", re.DOTALL)
         tests = pattern.findall(output)

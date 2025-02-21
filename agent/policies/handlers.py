@@ -1,11 +1,10 @@
 from dataclasses import dataclass
 from contextlib import contextmanager
-import os
 import re
 import jinja2
 from anthropic.types import MessageParam
 from langfuse.decorators import observe, langfuse_context
-from .common import TaskNode
+from .common import TaskNode, PolicyException
 from tracing_client import TracingClient
 from compiler.core import Compiler, CompileResult
 
@@ -428,13 +427,6 @@ Return fixed complete TypeScript definition encompassed with <handler> tag.
 """
 
 
-# TODO: Fix this terrible hack
-_current_dir = os.path.dirname(os.path.realpath(__file__))
-_handler_tpl_path = os.path.abspath(os.path.join(_current_dir, "../templates/interpolation/handler.tpl"))
-with open(_handler_tpl_path, "r", encoding="utf-8") as f:
-    HANDLER_TPL = f.read()
-
-
 @dataclass
 class HandlerOutput:
     name: str
@@ -523,15 +515,8 @@ class HandlerTaskNode(TaskNode[HandlerData, list[MessageParam]]):
         test_suite: str | None = kwargs.get("test_suite", None)
         try:
             handler = HandlerTaskNode.parse_output(response.content[0].text)
-            handler_check = typescript_jinja_env.from_string(HANDLER_TPL).render(
-                handler=handler,
-                handler_name=kwargs['function_name'],
-                argument_type=kwargs['argument_type'],
-                argument_schema=kwargs['argument_schema'],
-                test_suite=test_suite,
-            )
             files = {
-                f"src/handlers/{kwargs['function_name']}.ts": handler_check,
+                f"src/handlers/{kwargs['function_name']}.ts": handler,
                 "src/common/schema.ts": kwargs['typescript_schema'],
                 "src/db/schema/application.ts": kwargs['drizzle_schema'],
             }
@@ -546,12 +531,12 @@ class HandlerTaskNode(TaskNode[HandlerData, list[MessageParam]]):
                 case _:
                     raise ValueError(F"Invalid test suite class {test_suite}")
             output = HandlerOutput(
-                name=f"{kwargs['function_name']}Handler", # TODO: Fix, NASTY (to avoid name conflict when importing declaration)
+                name=kwargs['function_name'],
                 handler=handler,
                 feedback=feedback,
                 test_feedback=test_feedback,
             )
-        except Exception as e:
+        except PolicyException as e:
             output = e
         messages = [] if not init else input
         messages.append({"role": "assistant", "content": response.content[0].text})
@@ -568,7 +553,10 @@ class HandlerTaskNode(TaskNode[HandlerData, list[MessageParam]]):
     def is_successful(self) -> bool:
         if isinstance(self.data.output, Exception):
             return False
-        return self.data.output.is_successful or self.depth > 1 and self.score > 0
+        return (
+            self.data.output.is_successful 
+            or (self.depth > 1 and self.score > 0 and self.data.output.feedback["exit_code"] == 0)
+        )
     
     @staticmethod
     @contextmanager
@@ -591,6 +579,6 @@ class HandlerTaskNode(TaskNode[HandlerData, list[MessageParam]]):
         pattern = re.compile(r"<handler>(.*?)</handler>", re.DOTALL)
         match = pattern.search(output)
         if match is None:
-            raise ValueError("Failed to parse output")
+            raise PolicyException("Failed to parse output")
         handler = match.group(1).strip()
         return handler
