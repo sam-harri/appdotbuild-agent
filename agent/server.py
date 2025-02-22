@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, model_validator
 
 from anthropic import AnthropicBedrock
+from core.interpolator import Interpolator
 from application import Application
 from compiler.core import Compiler
 from langfuse.decorators import langfuse_context, observe
@@ -70,8 +71,10 @@ class BuildResponse(BaseModel):
 @app.post("/compile", response_model=BuildResponse)
 def compile(request: BuildRequest):
     with tempfile.TemporaryDirectory() as tmpdir:
-        application = Application(client, compiler, output_dir=tmpdir)
+        application = Application(client, compiler)
+        interpolator = Interpolator(".")
         bot = application.create_bot(request.prompt, request.botId)
+        interpolator.bake(bot, tmpdir)
         zipfile = shutil.make_archive(
             f"{tmpdir}/app_schema",
             "zip",
