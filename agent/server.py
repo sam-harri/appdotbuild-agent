@@ -76,9 +76,9 @@ def compile(request: BuildRequest):
         bot = application.create_bot(request.prompt, request.botId)
         interpolator.bake(bot, tmpdir)
         zipfile = shutil.make_archive(
-            f"{tmpdir}/app_schema",
-            "zip",
-            f"{application.generation_dir}/app_schema",
+            base_name=os.path.join(tmpdir, "app_schema"),
+            format="zip",
+            root_dir=os.path.join(tmpdir, "app_schema"),
         )
         with open(zipfile, "rb") as f:
             upload_result = requests.put(
@@ -86,7 +86,7 @@ def compile(request: BuildRequest):
                 data=f.read(),
             )
             upload_result.raise_for_status()
-        metadata = {"functions": bot.router.functions}
+        metadata = {"functions": bot.typespec.llm_functions}
         return BuildResponse(status="success", message="done", trace_id=bot.trace_id, metadata=metadata)
 
 

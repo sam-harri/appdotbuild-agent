@@ -34,7 +34,7 @@ class Interpolator:
 
     def bake(self, application: ApplicationOut, output_dir: str):
         template_dir = os.path.join(self.root_dir, "templates")
-        copytree(template_dir, output_dir, ignore=ignore_patterns('*.pyc', '__pycache__', 'node_modules'))
+        copytree(template_dir, output_dir, ignore=ignore_patterns('*.pyc', '__pycache__', 'node_modules'), dirs_exist_ok=True)
 
         with open(os.path.join(output_dir, "tsp_schema", "main.tsp"), "a") as f:
             f.write(application.typespec.typespec_definitions)
