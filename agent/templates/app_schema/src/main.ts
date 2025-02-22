@@ -107,19 +107,21 @@ async function main(ctx: typeof Context) {
     let toolResults: ToolResultBlock[] = [];
     let textContent: string[] = [];
 
-    thread.forEach((message) => {
-        if (typeof message.content === "string") {
-            if (message.role === "assistant") {
-                textContent.push(message.content);
-            }
-        } else {
-            toolCalls.push(...message.content.filter((content) => content.type === "tool_use"));
-            toolResults.push(...message.content.filter((content) => content.type === "tool_result"));
-            if (message.role === "assistant") {
-                textContent.push(...message.content.filter((content) => content.type === "text").map((content) => content.text));
-            }
+    thread.forEach(({ role, content }) => {
+        if (role === "assistant" && typeof content === "string") {
+            textContent.push(content);
+        } else if (Array.isArray(content)) {
+            content.forEach((block) => {
+                if (block.type === "tool_use") {
+                    toolCalls.push(block);
+                } else if (block.type === "tool_result") {
+                    toolResults.push(block);
+                } else if (block.type === "text" && role === "assistant") {
+                    textContent.push(block.text);
+                }
+            })
         }
-    })
+    });
 
     const toolLines = toolResults.map((toolResult) => {
         const toolCall = toolCalls.find((toolCall) => toolCall.id === toolResult.tool_use_id);
