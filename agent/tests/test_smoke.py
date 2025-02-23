@@ -358,9 +358,7 @@ def test_end2end():
     feature_flags.refine_initial_prompt = True
 
     with tempfile.TemporaryDirectory() as tempdir:
-        current_path = os.path.dirname(os.path.abspath(__file__))
-        templates_path = os.path.join(current_path, "../templates")
-        application = Application(client, compiler, templates_path, tempdir)
+        application = Application(client, compiler)
         my_bot = application.create_bot("Create a bot that does something please")
 
         assert client.messages.create.call_count == 7
