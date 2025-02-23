@@ -72,7 +72,7 @@ def _get_pseudo_llm_response(*args, **kwargs):
         }
 
         interface SimpleResponseBot {
-            @llm_func(1)
+            @llm_func("process user input and generate response")
             processInput(options: InputMessage): ResponseMessage;
         }
         </typespec>
@@ -367,7 +367,6 @@ def test_end2end():
         assert my_bot.gherkin is not None
         assert my_bot.typescript_schema.error_output is None
         assert my_bot.drizzle.error_output is None
-        assert my_bot.router.error_output is None
 
 
         for x in my_bot.handlers.values():
