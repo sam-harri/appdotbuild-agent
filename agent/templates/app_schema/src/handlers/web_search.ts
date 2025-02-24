@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { GenericHandler, type Message } from "../common/handler";
 import * as process from 'process';
 import fetch from 'node-fetch';
 
