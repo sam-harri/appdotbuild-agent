@@ -23,7 +23,7 @@ export const handlers: ToolHandler<any>[] = [{% for handler in handlers %}
         name: '{{ handler.name }}',
         description: `{{ handler.description }}`,
         handler: {{ handler.name }}.handle,
-        inputSchema: schema.{{ handler.argument_schema }},
+        inputSchema: {{ handler.argument_schema }},
     },{% endfor %}
 ];
 """.strip()
@@ -51,7 +51,7 @@ class Interpolator:
             {
                 "name": name,
                 "description": next((f.description for f in application.typespec.llm_functions if f.name == name), ""),
-                "argument_schema": handler.argument_schema,
+                "argument_schema": f"schema.{handler.argument_schema}",
             }
             for name, handler in application.handlers.items()
         ]
