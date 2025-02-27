@@ -15,6 +15,44 @@ from application import Application
 from compiler.core import Compiler
 from langfuse.decorators import langfuse_context, observe
 
+import logging
+import logging.handlers
+from datetime import datetime
+import sys
+
+logger = logging.getLogger(__name__)
+
+
+# configure logging with time, file, line number and write to console and rotated files
+def setup_logging():
+    log_formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s'
+    )
+    
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(log_formatter)
+    
+    log_dir = os.path.join(os.getcwd(), '/tmp/logs')
+    os.makedirs(log_dir, exist_ok=True)
+    
+    file_handler = logging.handlers.RotatingFileHandler(
+        filename=os.path.join(log_dir, f'server_{datetime.now().strftime("%Y%m%d")}.log'),
+        maxBytes=10 * 1024 * 1024,  # 10 MB
+        backupCount=5
+    )
+    file_handler.setFormatter(log_formatter)
+    
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    root_logger.addHandler(console_handler)
+    root_logger.addHandler(file_handler)
+    
+    logging.getLogger('urllib3').setLevel(logging.WARNING)
+    logging.getLogger('anthropic').setLevel(logging.INFO)
+
+setup_logging()
+
+
 client = AnthropicBedrock(aws_region="us-west-2")
 compiler = Compiler("botbuild/tsp_compiler", "botbuild/app_schema")
 
@@ -73,7 +111,9 @@ def compile(request: BuildRequest):
     with tempfile.TemporaryDirectory() as tmpdir:
         application = Application(client, compiler)
         interpolator = Interpolator(".")
+        logger.info(f"Creating bot with prompt: {request.prompt}")
         bot = application.create_bot(request.prompt, request.botId)
+        logger.info(f"Baked bot to {tmpdir}")
         interpolator.bake(bot, tmpdir)
         zipfile = shutil.make_archive(
             base_name=os.path.join(tmpdir, "app_schema"),
@@ -87,6 +127,7 @@ def compile(request: BuildRequest):
             )
             upload_result.raise_for_status()
         metadata = {"functions": bot.typespec.llm_functions}
+        logger.info(f"Uploaded bot to {request.writeUrl}")
         return BuildResponse(status="success", message="done", trace_id=bot.trace_id, metadata=metadata)
 
 
