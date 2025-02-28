@@ -1,5 +1,5 @@
 <script lang="ts">
-  import ChatBox from './lib/ChatBox.svelte';
+  import ChatBox from './components/ChatBox.svelte';
 </script>
 
 <main>
