@@ -83,9 +83,9 @@ def generate_bot( write_url: str, prompt: str, trace_id: str, bot_id: str | None
         logger.info(f"Baked bot to {tmpdir}")
         interpolator.bake(bot, tmpdir)
         zipfile = shutil.make_archive(
-            base_name=os.path.join(tmpdir, "app_schema"),
+            base_name=tmpdir,
             format="zip",
-            root_dir=os.path.join(tmpdir, "app_schema"),
+            root_dir=tmpdir,
         )
         with open(zipfile, "rb") as f:
             upload_result = requests.put(write_url, data=f.read())
