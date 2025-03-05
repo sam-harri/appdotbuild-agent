@@ -422,8 +422,10 @@ Follow original formatting, return <imports> and corrected complete test suite w
 HANDLER_TEST_TPL = """
 import { afterEach, beforeEach, describe } from "bun:test";
 import { resetDB, createDB } from "../../helpers";
-{{handler_function_import}}
 {{imports}}
+{% if handler_function_import not in imports %}
+{{handler_function_import}}
+{% endif %}
 
 describe("{{handler_name}}", () => {
     beforeEach(async () => {
