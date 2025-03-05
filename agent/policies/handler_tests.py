@@ -469,18 +469,15 @@ class HandlerTestTaskNode(TaskNode[HandlerTestData, list[MessageParam]]):
     def run_args(self) -> list[MessageParam]:
         fix_template = typescript_jinja_env.from_string(FIX_PROMPT)
         messages = []
-        number_of_env_related_issues = 0
         for node in self.get_trajectory():
             messages.extend(node.data.messages)
             content = None
             match node.data.output:
+                case HandlerTestOutput(feedback={"exit_code": exit_code}) if exit_code == 137:
+                    langfuse_context.update_current_observation(output=PolicyException("Seen environment related issues, please fix manually"))
+                    break
                 case HandlerTestOutput(feedback={"exit_code": exit_code, "stdout": stdout}) if exit_code != 0:
                     content = fix_template.render(errors=f"stdout: {stdout}\nexit code: {exit_code}")
-                    if exit_code == 137:
-                      number_of_env_related_issues += 1
-                    if number_of_env_related_issues > MAX_ENV_RELATED_ISSUES:
-                      langfuse_context.update_current_observation(output=PolicyException("Too many environment related issues, please fix them manually"))
-                      continue
                 case HandlerTestOutput():
                     continue
                 case Exception() as e:
