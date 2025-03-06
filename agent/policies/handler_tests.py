@@ -484,9 +484,6 @@ class HandlerTestTaskNode(TaskNode[HandlerTestData, list[MessageParam]]):
             messages.extend(node.data.messages)
             content = None
             match node.data.output:
-                case HandlerTestOutput(feedback={"exit_code": exit_code}) if exit_code == 137:
-                    langfuse_context.update_current_observation(output=PolicyException("Seen environment related issues, please fix manually"))
-                    break
                 case HandlerTestOutput(feedback={"exit_code": exit_code, "stdout": stdout}) if exit_code != 0:
                     content = fix_template.render(errors=f"stdout: {stdout}\nexit code: {exit_code}")
                 case HandlerTestOutput():
