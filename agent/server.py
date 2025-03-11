@@ -8,7 +8,7 @@ import requests
 import sentry_sdk
 from fastapi import FastAPI, BackgroundTasks, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, model_validator, Field
 
 from anthropic import AnthropicBedrock
 from core.interpolator import Interpolator
@@ -56,7 +56,7 @@ async def check_bearer(request: Request, call_next):
 class BuildRequest(BaseModel):
     readUrl: Optional[str] = None
     writeUrl: str
-    prompt: str # deprecated
+    prompt: Optional[str] = None # deprecated
     prompts: Optional[list[str]] = None
     botId: Optional[str] = None
     capabilities: Optional[list[str]] = None
