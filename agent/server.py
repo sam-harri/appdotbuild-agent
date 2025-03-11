@@ -56,17 +56,11 @@ async def check_bearer(request: Request, call_next):
 class BuildRequest(BaseModel):
     readUrl: Optional[str] = None
     writeUrl: str
-    prompt: str
+    prompt: str # deprecated
+    prompts: Optional[list[str]] = None
     botId: Optional[str] = None
     capabilities: Optional[list[str]] = None
     readUrl: Optional[str] = None
-
-    @model_validator(mode="after")
-    def validate_urls(self) -> Self:
-        # we don't support modifications yet
-        if self.readUrl:
-            raise ValueError("readUrl is not supported")
-        return self
 
 
 class BuildResponse(BaseModel):
@@ -83,12 +77,12 @@ class CapabilitiesResponse(BaseModel):
     capabilities: list[str]
     
 
-def generate_bot(write_url: str, prompt: str, trace_id: str, bot_id: str | None, capabilities: list[str] | None = None):
+def generate_bot(write_url: str, read_url: str, prompts: list[str], trace_id: str, bot_id: str | None, capabilities: list[str] | None = None):
     with tempfile.TemporaryDirectory() as tmpdir:
         application = Application(client, compiler)
         interpolator = Interpolator(".")
-        logger.info(f"Creating bot with prompt: {prompt}")
-        bot = application.create_bot(prompt, bot_id, langfuse_observation_id=trace_id, capabilities=capabilities)
+        logger.info(f"Creating bot with prompts: {prompts}")
+        bot = application.create_bot(prompts[0], bot_id, langfuse_observation_id=trace_id, capabilities=capabilities)
         logger.info(f"Baked bot to {tmpdir}")
         interpolator.bake(bot, tmpdir)
         zipfile = shutil.make_archive(
@@ -104,7 +98,7 @@ def generate_bot(write_url: str, prompt: str, trace_id: str, bot_id: str | None,
 @app.post("/compile", response_model=BuildResponse)
 def compile(request: BuildRequest, background_tasks: BackgroundTasks):
     trace_id = uuid.uuid4().hex
-    background_tasks.add_task(generate_bot, request.writeUrl, request.prompt, trace_id, request.botId, request.capabilities)
+    background_tasks.add_task(generate_bot, request.writeUrl, request.readUrl, request.prompts if request.prompts else [request.prompt], trace_id, request.botId, request.capabilities)
     return BuildResponse(status="success", message="done", trace_id=trace_id)
 
 
