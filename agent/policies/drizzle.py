@@ -39,6 +39,11 @@ export const messagesTable = pgTable("messages", {
 });
 </drizzle>
 
+<best_practices>
+- use `text` type for user_id (if it exists)
+- use `timestamp({ withTimezone: true })` type for any date field
+</best_practices>
+
 Application TypeSpec:
 
 {{typespec_definitions}}

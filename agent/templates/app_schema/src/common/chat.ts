@@ -11,6 +11,7 @@ import { handlers } from '../tools';
 import { custom_handlers } from '../custom_tools';
 import { getHistory, putMessageBatch } from './crud';
 import type { ContentBlock } from './llm';
+
 const makeSchema = (schema: z.ZodObject<any>) => {
   const jsonSchema = zodToJsonSchema(schema, {
     target: 'jsonSchema7',
@@ -29,7 +30,9 @@ const handlerTools = handlers.map((tool) => ({
 }));
 
 function getCustomTools() {
-  const availableCustomTools = custom_handlers.filter((tool) => tool.can_handle());
+  const availableCustomTools = custom_handlers.filter((tool) =>
+    tool.can_handle()
+  );
   return availableCustomTools.map((tool) => ({
     ...tool,
     toolInput: makeSchema(tool.inputSchema),
@@ -60,8 +63,9 @@ async function callClaude(prompt: string | MessageParam[]) {
 
 async function callTool(toolBlock: ToolUseBlock): Promise<ToolResultBlock> {
   const { name, id, input } = toolBlock;
-  const tool = handlerTools.find((tool) => tool.name === name)
-    || getCustomTools().find((tool) => tool.name === name);
+  const tool =
+    handlerTools.find((tool) => tool.name === name) ||
+    getCustomTools().find((tool) => tool.name === name);
   if (tool) {
     try {
       const content = await tool.handler(tool.inputSchema.parse(input) as any);
@@ -145,11 +149,14 @@ export async function handleChat({
       break;
     }
 
-    const safeContent = response.content.filter(block => 
+    const safeContent = response.content.filter((block) =>
       ['text', 'tool_use', 'tool_result'].includes(block.type)
     );
-    
-    thread.push({ role: response.role, content: safeContent as ContentBlock[] });
+
+    thread.push({
+      role: response.role,
+      content: safeContent as ContentBlock[],
+    });
 
     const toolUseBlocks = response.content.filter<ToolUseBlock>(
       (content) => content.type === 'tool_use'
