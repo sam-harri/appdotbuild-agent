@@ -53,12 +53,21 @@ async def check_bearer(request: Request, call_next):
     response = await call_next(request)
     return response
 
+from dataclasses import dataclass
+from typing import Optional
+from datetime import datetime
+
+@dataclass
+class Prompt:
+    prompt: str
+    createdAt: datetime
+    kind: str
 
 class BuildRequest(BaseModel):
     readUrl: Optional[str] = None
     writeUrl: str
     prompt: Optional[str] = None # deprecated
-    prompts: Optional[list[str]] = None
+    prompts: Optional[list[Prompt]] = None
     botId: Optional[str] = None
     capabilities: Optional[list[str]] = None
     
@@ -66,7 +75,7 @@ class BuildRequest(BaseModel):
 class PrepareRequest(BaseModel):
     readUrl: Optional[str] = None
     writeUrl: str
-    prompts: Optional[list[str]] = None
+    prompts: Optional[list[Prompt]] = None
     botId: Optional[str] = None
     capabilities: Optional[list[str]] = None
 
@@ -98,7 +107,7 @@ def generate_bot(write_url: str, read_url: str, prompts: list[str], trace_id: st
         application = Application(client, compiler)
         interpolator = Interpolator(".")
         logger.info(f"Creating bot with prompts: {prompts}")
-        bot = application.create_bot(prompts[0], bot_id, langfuse_observation_id=trace_id, capabilities=capabilities)
+        bot = application.create_bot(prompts[0].prompt, bot_id, langfuse_observation_id=trace_id, capabilities=capabilities)
         logger.info(f"Baked bot to {tmpdir}")
         interpolator.bake(bot, tmpdir)
         zipfile = shutil.make_archive(
@@ -147,14 +156,14 @@ def generate_update_bot(write_url: str, read_url: str, typespec: str, trace_id: 
             upload_result.raise_for_status()
 
 
-def prepare_bot(prompts: list[str], trace_id: str, bot_id: str | None, capabilities: list[str] | None = None):
+def prepare_bot(prompts: list[Prompt], trace_id: str, bot_id: str | None, capabilities: list[str] | None = None):
     with tempfile.TemporaryDirectory() as tmpdir:
         application = Application(client, compiler)
         logger.info(f"Creating bot with prompts: {prompts}")
         if not prompts:
             logger.error("No prompts provided")
             raise ValueError("No prompts provided")
-        bot = application.prepare_bot(prompts, bot_id, langfuse_observation_id=trace_id, capabilities=capabilities)
+        bot = application.prepare_bot([p.prompt for p in prompts], bot_id, langfuse_observation_id=trace_id, capabilities=capabilities)
         logger.info(f"Baked bot to {tmpdir}")
         return bot
 
