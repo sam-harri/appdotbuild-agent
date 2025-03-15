@@ -9,8 +9,7 @@ from langfuse.decorators import langfuse_context, observe
 from policies import common, handlers, typespec, drizzle, typescript, app_testcases, handler_tests, refine
 from core import feature_flags
 from core.datatypes import *
-
-
+from policies.typespec import TypespecTaskNode
 
 class Application:
     def __init__(self, client: AnthropicBedrock, compiler: Compiler, branch_factor: int = 2, max_depth: int = 4, max_workers: int = 5, dfs_budget: int = 20, thinking_budget: int = 0):
@@ -21,6 +20,142 @@ class Application:
         self.MAX_DEPTH = max_depth
         self.MAX_WORKERS = max_workers
         self.DFS_BUDGET = dfs_budget
+
+
+    @observe(capture_output=False)
+    def prepare_bot(self, prompts: list[str], bot_id: str | None = None, capabilities: list[str] | None = None, *args, **kwargs):
+        langfuse_context.update_current_trace(user_id=os.environ.get("USER_ID", socket.gethostname()))
+        if bot_id is not None:
+            langfuse_context.update_current_observation(metadata={"bot_id": bot_id})
+
+        print("Compiling TypeSpec...")
+        typespec = self._make_typespec(prompts)
+        if typespec.error_output is not None:
+            raise Exception(f"Failed to generate typespec: {typespec.error_output}")
+        typespec_definitions = typespec.typespec_definitions
+
+        if feature_flags.gherkin:
+            print("Compiling Gherkin Test Cases...")
+            gherkin = self._make_testcases(typespec_definitions)
+            if gherkin.error_output is not None:
+                raise Exception(f"Failed to generate gherkin test cases: {gherkin.error_output}")
+        else:
+            gherkin = GherkinOut(None, None, None)
+
+        langfuse_context.update_current_observation(
+            output = {
+                "typespec": typespec.__dict__,
+                "gherkin": gherkin.__dict__,
+                "scenarios": {f.name: f.scenario for f in typespec.llm_functions}, # TODO: get gherkin scenarios from typespec
+                "capabilities": capabilities,
+            },
+            metadata = {
+                "typespec_ok": typespec.error_output is None,
+                "gherkin_ok": gherkin.error_output is None,
+            },
+        )
+        # Create capabilities object only if capabilities is not None
+        capabilities_out = CapabilitiesOut(capabilities if capabilities is not None else [], None)
+        return ApplicationOut(refined_description=None,
+                              capabilities=capabilities_out, 
+                              typespec=typespec,
+                              drizzle=None,
+                              handlers={}, 
+                              handler_tests={}, 
+                              typescript_schema=None,
+                              gherkin=gherkin,
+                              trace_id=langfuse_context.get_current_trace_id())
+    
+    @observe(capture_output=False)
+    def update_bot(self, typespecSchema: str, bot_id: str | None = None, capabilities: list[str] | None = None, *args, **kwargs):
+        langfuse_context.update_current_trace(user_id=os.environ.get("USER_ID", socket.gethostname()))
+        if bot_id is not None:
+            langfuse_context.update_current_observation(metadata={"bot_id": bot_id})
+        
+        # Create a refined description from the typespec
+        print("Creating prompt from TypeSpec...")
+        app_prompt = RefineOut(typespecSchema, None)
+        
+        # We already have the typespec, so create a TypespecOut object
+        print("Processing TypeSpec...")
+        
+        # TODO: fix with separating typespec parsing from typespec generation
+        _, typespec_definitions, llm_functions = TypespecTaskNode.parse_output(f"<reasoning>...</reasoning><typespec>{typespecSchema}</typespec>")
+        
+        typespec_out = TypespecOut(
+            reasoning="Imported from existing typespec",
+            typespec_definitions=typespec_definitions,
+            llm_functions=llm_functions,
+            error_output=None
+        )
+        
+        if feature_flags.gherkin:
+            print("Generating Gherkin Test Cases...")
+            gherkin = self._make_testcases(typespec_definitions)
+            if gherkin.error_output is not None:
+                raise Exception(f"Failed to generate gherkin test cases: {gherkin.error_output}")
+        else:
+            gherkin = GherkinOut(None, None, None)
+        
+        print("Generating Typescript Schema...")
+        typescript_schema = self._make_typescript_schema(typespec_definitions)
+        if typescript_schema.error_output is not None:
+            raise Exception(f"Failed to generate typescript schema: {typescript_schema.error_output}")
+        typescript_schema_definitions = typescript_schema.typescript_schema
+        typescript_functions = typescript_schema.functions
+        
+        print("Generating Drizzle Schema...")
+        drizzle = self._make_drizzle(typespec_definitions)
+        if drizzle.error_output is not None:
+            raise Exception(f"Failed to generate drizzle schema: {drizzle.error_output}")
+        drizzle_schema = drizzle.drizzle_schema
+        
+        print("Generating Handler Tests...")
+        handler_test_dict = self._make_handler_tests(typescript_functions, typescript_schema_definitions, drizzle_schema)
+        
+        print("Generating Handlers...")
+        handlers = self._make_handlers(typescript_functions, handler_test_dict, typespec_definitions, typescript_schema_definitions, drizzle_schema)
+        
+        updated_capabilities = capabilities if capabilities is not None else []
+        
+        langfuse_context.update_current_observation(
+            output = {
+                "refined_description": app_prompt.__dict__,
+                "typespec": typespec_out.__dict__,
+                "typescript_schema": typescript_schema.__dict__,
+                "drizzle": drizzle.__dict__,
+                "handlers": {k: v.__dict__ for k, v in handlers.items()},
+                "handler_tests": {k: v.__dict__ for k, v in handler_test_dict.items()},
+                "gherkin": gherkin.__dict__,
+                "scenarios": {f.name: f.scenario for f in typespec_out.llm_functions},
+                "capabilities": updated_capabilities,
+            },
+            metadata = {
+                "refined_description_ok": app_prompt.error_output is None,
+                "typespec_ok": True,  # We trust the provided typespec
+                "typescript_schema_ok": typescript_schema.error_output is None,
+                "drizzle_ok": drizzle.error_output is None,
+                "all_handlers_ok": all(handler.error_output is None for handler in handlers.values()),
+                "all_handler_tests_ok": all(handler_test.error_output is None for handler_test in handler_test_dict.values()),
+                "gherkin_ok": gherkin.error_output is None,
+                "is_update": True,
+            },
+        )
+        
+        capabilities_out = CapabilitiesOut(updated_capabilities, None)
+        return ApplicationOut(
+            app_prompt, 
+            capabilities_out, 
+            typespec_out, 
+            drizzle, 
+            handlers, 
+            handler_test_dict, 
+            typescript_schema, 
+            gherkin, 
+            langfuse_context.get_current_trace_id()
+        )
+
+    
 
     @observe(capture_output=False)
     def create_bot(self, application_description: str, bot_id: str | None = None, capabilities: list[str] | None = None, *args, **kwargs):
@@ -94,6 +229,7 @@ class Application:
         capabilities_out = CapabilitiesOut(capabilities if capabilities is not None else [], None)
         return ApplicationOut(app_prompt, capabilities_out, typespec, drizzle, handlers, handler_test_dict, typescript_schema, gherkin, langfuse_context.get_current_trace_id())
 
+
     @observe(capture_input=False, capture_output=False)
     def _make_typescript_schema(self, typespec_definitions: str):
         content = self.jinja_env.from_string(typescript.PROMPT).render(typespec_definitions=typespec_definitions)
@@ -124,8 +260,8 @@ class Application:
                 return GherkinOut(output.reasoning, output.gherkin, output.error_or_none)
 
     @observe(capture_input=False, capture_output=False)
-    def _make_typespec(self, application_description: str):
-        content = self.jinja_env.from_string(typespec.PROMPT).render(application_description=application_description)
+    def _make_typespec(self, prompts: list[str]):
+        content = self.jinja_env.from_string(typespec.PROMPT).render(user_requests=prompts)
         message = {"role": "user", "content": content}
         with typespec.TypespecTaskNode.platform(self.client, self.compiler, self.jinja_env):
             tsp_data = typespec.TypespecTaskNode.run([message], init=True)
