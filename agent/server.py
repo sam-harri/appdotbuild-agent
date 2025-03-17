@@ -57,11 +57,15 @@ from dataclasses import dataclass
 from typing import Optional
 from datetime import datetime
 
-@dataclass
-class Prompt:
+class Prompt(BaseModel):
     prompt: str
     createdAt: datetime
     kind: str
+    
+    def __iter__(self):
+        yield "prompt", self.prompt
+        yield "createdAt", self.createdAt.isoformat()
+        yield "kind", self.kind
 
 class BuildRequest(BaseModel):
     readUrl: Optional[str] = None
@@ -73,9 +77,7 @@ class BuildRequest(BaseModel):
     
     
 class PrepareRequest(BaseModel):
-    readUrl: Optional[str] = None
-    writeUrl: str
-    prompts: Optional[list[Prompt]] = None
+    prompts: list[Prompt]
     botId: Optional[str] = None
     capabilities: Optional[list[str]] = None
 
