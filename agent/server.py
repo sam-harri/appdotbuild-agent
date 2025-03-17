@@ -127,48 +127,48 @@ def generate_update_bot(write_url: str, read_url: str, typespec: str, trace_id: 
         logger.info(f"Staring background job to update bot")
         with tempfile.TemporaryDirectory() as tmpdir:
             application = Application(client, compiler)
-        interpolator = Interpolator(".")
-        logger.info(f"Updating bot with typespec: {typespec}")
-        
-        bot = application.update_bot(typespec, bot_id, langfuse_observation_id=trace_id, capabilities=capabilities)
-        logger.info(f"Updated bot successfully")
-        
-        # download the bot from read_url
-        if read_url:
-            try:
-                logger.info(f"Reading bot from {read_url}")
-                with requests.get(read_url) as r:
-                    r.raise_for_status()
-                    with open(os.path.join(tmpdir, "bot.zip"), "wb") as f:
-                        f.write(r.content)
-                    # unzip the bot
-                    with zipfile.ZipFile(os.path.join(tmpdir, "bot.zip"), "r") as zip_ref:
-                        zip_ref.extractall(tmpdir)
-                    logger.info(f"Extracted bot from successfully to {tmpdir}")
-                # bake the bot overwriting parts of the existing bot
-                interpolator.bake(bot, tmpdir, overwrite=True)
-                logger.info(f"Baked bot successfully to {tmpdir}")
-            except Exception as e:
-                logger.warning(f"Failed to read or process existing bot from {read_url}: {str(e)}")
-                logger.info(f"Falling back to fresh bot build")
-                interpolator.bake(bot, tmpdir)
-                logger.info(f"Baked fresh bot successfully to {tmpdir}")
-        else:
-            interpolator.bake(bot, tmpdir)
-            logger.info(f"Baked bot successfully to {tmpdir}")
+            interpolator = Interpolator(".")
+            logger.info(f"Updating bot with typespec: {typespec}")
             
-        # zip the bot
-        zip_path = shutil.make_archive(
-            base_name=tmpdir,
-            format="zip",
-            root_dir=tmpdir,
-        )
-        logger.info(f"Zipped bot successfully to {zip_path}")
-        # upload the bot
-        with open(zip_path, "rb") as f:
-            upload_result = requests.put(write_url, data=f.read())
-            upload_result.raise_for_status()
-            logger.info(f"Uploaded bot successfully to {write_url}")
+            bot = application.update_bot(typespec, bot_id, langfuse_observation_id=trace_id, capabilities=capabilities)
+            logger.info(f"Updated bot successfully")
+            
+            # download the bot from read_url
+            if read_url:
+                try:
+                    logger.info(f"Reading bot from {read_url}")
+                    with requests.get(read_url) as r:
+                        r.raise_for_status()
+                        with open(os.path.join(tmpdir, "bot.zip"), "wb") as f:
+                            f.write(r.content)
+                        # unzip the bot
+                        with zipfile.ZipFile(os.path.join(tmpdir, "bot.zip"), "r") as zip_ref:
+                            zip_ref.extractall(tmpdir)
+                        logger.info(f"Extracted bot from successfully to {tmpdir}")
+                    # bake the bot overwriting parts of the existing bot
+                    interpolator.bake(bot, tmpdir, overwrite=True)
+                    logger.info(f"Baked bot successfully to {tmpdir}")
+                except Exception as e:
+                    logger.warning(f"Failed to read or process existing bot from {read_url}: {str(e)}")
+                    logger.info(f"Falling back to fresh bot build")
+                    interpolator.bake(bot, tmpdir)
+                    logger.info(f"Baked fresh bot successfully to {tmpdir}")
+            else:
+                interpolator.bake(bot, tmpdir)
+                logger.info(f"Baked bot successfully to {tmpdir}")
+                
+            # zip the bot
+            zip_path = shutil.make_archive(
+                base_name=tmpdir,
+                format="zip",
+                root_dir=tmpdir,
+            )
+            logger.info(f"Zipped bot successfully to {zip_path}")
+            # upload the bot
+            with open(zip_path, "rb") as f:
+                upload_result = requests.put(write_url, data=f.read())
+                upload_result.raise_for_status()
+                logger.info(f"Uploaded bot successfully to {write_url}")
     except Exception as e:
         logger.error(f"Failed to update bot: {str(e)}")
         raise e
