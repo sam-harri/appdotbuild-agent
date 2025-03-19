@@ -1,434 +1,450 @@
 import os
+import enum
+import uuid
 import socket
-import jinja2
 import concurrent.futures
 from anthropic import AnthropicBedrock
 from compiler.core import Compiler
-from tracing_client import TracingClient
-from langfuse.decorators import langfuse_context, observe
-from policies import common, handlers, typespec, drizzle, typescript, app_testcases, handler_tests, refine
-from core import feature_flags
-from core.datatypes import *
-from policies.typespec import TypespecTaskNode
+from langfuse import Langfuse
+from fsm_core.helpers import agent_dfs, span_claude_bedrock
+from fsm_core import typespec, drizzle, typescript, handler_tests, handlers
+from fsm_core.common import Node, AgentState, AgentMachine
+import statemachine
+from core.datatypes import ApplicationPrepareOut, CapabilitiesOut, DrizzleOut, TypespecOut, ApplicationOut
+from core.datatypes import RefineOut, GherkinOut, TypescriptOut, HandlerTestsOut, HandlerOut
+
+
+def solve_agent[T](
+    init: AgentMachine[T],
+    context: T,
+    m_claude: AnthropicBedrock,
+    langfuse: Langfuse,
+    langfuse_parent_trace_id: str,
+    langfuse_parent_observation_id: str,
+    max_depth: int = 3,
+    max_width: int = 2,
+):
+    def llm_fn(messages, generation):
+        completion = span_claude_bedrock(m_claude, messages, generation)
+        return {"role": "assistant", "content": completion.content}
+
+    solution = agent_dfs(
+        init,
+        context,
+        llm_fn,
+        langfuse,
+        langfuse_parent_trace_id,
+        langfuse_parent_observation_id,
+        max_depth=max_depth,
+        max_width=max_width,
+    )
+    return solution
+
+
+# set up actors
+
+class ActorContext:
+    def __init__(self, compiler: Compiler):
+        self.compiler = compiler
+
+
+class TypespecActor:
+    def __init__(self, m_claude: AnthropicBedrock, compiler: Compiler, langfuse_client: Langfuse, trace_id: str, observation_id: str):
+        self.m_claude = m_claude
+        self.compiler = compiler
+        self.langfuse_client = langfuse_client
+        self.trace_id = trace_id
+        self.observation_id = observation_id
+
+    def execute(self, user_requests: list[str]):
+        span = self.langfuse_client.span(
+            name="typespec",
+            trace_id=self.trace_id,
+            parent_observation_id=self.observation_id,
+        )
+        start = typespec.Entry(user_requests)
+        result, _ = solve_agent(start, ActorContext(self.compiler), self.m_claude, self.langfuse_client, self.trace_id, span.id)
+        if result is None:
+            raise ValueError("Failed to solve typespec")
+        if not isinstance(result.data.inner, typespec.Success):
+            raise Exception("Bad state: " + str(result.data.inner))
+        span.end(output=result.data.inner.__dict__)
+        return result.data.inner
+
+
+class DrizzleActor:
+    def __init__(self, m_claude: AnthropicBedrock, compiler: Compiler, langfuse_client: Langfuse, trace_id: str, observation_id: str):
+        self.m_claude = m_claude
+        self.compiler = compiler
+        self.langfuse_client = langfuse_client
+        self.trace_id = trace_id
+        self.observation_id = observation_id
+
+    def execute(self, typespec_definitions: str):
+        span = self.langfuse_client.span(
+            name="drizzle",
+            trace_id=self.trace_id,
+            parent_observation_id=self.observation_id,
+        )
+        start = drizzle.Entry(typespec_definitions)
+        result, _ = solve_agent(start, ActorContext(self.compiler), self.m_claude, self.langfuse_client, self.trace_id, span.id)
+        if result is None:
+            raise ValueError("Failed to solve drizzle")
+        if not isinstance(result.data.inner, drizzle.Success):
+            raise Exception("Failed to solve drizzle: " + str(result.data.inner))
+        span.end(output=result.data.inner.__dict__)
+        return result.data.inner
+
+
+class TypescriptActor:
+    def __init__(self, m_claude: AnthropicBedrock, compiler: Compiler, langfuse_client: Langfuse, trace_id: str, observation_id: str):
+        self.m_claude = m_claude
+        self.compiler = compiler
+        self.langfuse_client = langfuse_client
+        self.trace_id = trace_id
+        self.observation_id = observation_id
+
+    def execute(self, typespec_definitions: str):
+        span = self.langfuse_client.span(
+            name="typescript",
+            trace_id=self.trace_id,
+            parent_observation_id=self.observation_id,
+        )
+        start = typescript.Entry(typespec_definitions)
+        result, _ = solve_agent(start, ActorContext(self.compiler), self.m_claude, self.langfuse_client, self.trace_id, span.id)
+        if result is None:
+            raise ValueError("Failed to solve typescript")
+        if not isinstance(result.data.inner, typescript.Success):
+            raise Exception("Failed to solve typescript: " + str(result.data.inner))
+        span.end(output=result.data.inner.__dict__)
+        return result.data.inner
+
+
+class HandlerTestsActor:
+    def __init__(self, m_claude: AnthropicBedrock, compiler: Compiler, langfuse_client: Langfuse, trace_id: str, observation_id: str, max_workers=5):
+        self.m_claude = m_claude
+        self.compiler = compiler
+        self.langfuse_client = langfuse_client
+        self.trace_id = trace_id
+        self.observation_id = observation_id
+        self.max_workers = max_workers
+    
+    def execute(self, functions: list[typescript.FunctionDeclaration], typescript_schema: str, drizzle_schema: str) -> dict[str, handler_tests.Success]:
+        span = self.langfuse_client.span(
+            name="handler_tests",
+            trace_id=self.trace_id,
+            parent_observation_id=self.observation_id,
+        )
+        future_to_tests: dict[concurrent.futures.Future[tuple[Node[AgentState] | None, Node[AgentState]]], str] = {}
+        result_dict = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            for function in functions:
+                start = handler_tests.Entry(function.name, typescript_schema, drizzle_schema)
+                future_to_tests[executor.submit(solve_agent, start, ActorContext(self.compiler), self.m_claude, self.langfuse_client, self.trace_id, span.id)] = function.name
+            for future in concurrent.futures.as_completed(future_to_tests):
+                function = future_to_tests[future]
+                result, _ = future.result()
+                # can skip if failure and generate what succeeded
+                if result is None:
+                    raise ValueError(f"Failed to solve handler tests for {function}")
+                if not isinstance(result.data.inner, handler_tests.Success):
+                    raise Exception(f"Failed to solve handler tests for {function}: " + str(result.data.inner))
+                result_dict[function] = result.data.inner
+        span.end(output=result_dict)
+        return result_dict
+
+
+class HandlersActor:
+    def __init__(self, m_claude: AnthropicBedrock, compiler: Compiler, langfuse_client: Langfuse, trace_id: str, observation_id: str):
+        self.m_claude = m_claude
+        self.compiler = compiler
+        self.langfuse_client = langfuse_client
+        self.trace_id = trace_id
+        self.observation_id = observation_id
+
+    def execute(self, functions: list[typescript.FunctionDeclaration], typescript_schema: str, drizzle_schema: str, tests: dict[str, handler_tests.Success]) -> dict[str, handlers.Success | handlers.TestsError]:
+        span = self.langfuse_client.span(
+            name="handlers",
+            trace_id=self.trace_id,
+            parent_observation_id=self.observation_id,
+        )
+        futures_to_handlers: dict[concurrent.futures.Future[tuple[Node[AgentState] | None, Node[AgentState]]], str] = {}
+        result_dict = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            for function in functions:
+                start = handlers.Entry(function.name, typescript_schema, drizzle_schema, tests[function.name].source)
+                futures_to_handlers[executor.submit(solve_agent, start, ActorContext(self.compiler), self.m_claude, self.langfuse_client, self.trace_id, span.id)] = function.name
+            for future in concurrent.futures.as_completed(futures_to_handlers):
+                function = futures_to_handlers[future]
+                result, _ = future.result()
+                if result is None:
+                    raise ValueError(f"Failed to solve handlers for {function}")
+                if isinstance(result.data.inner, handlers.TestsError) and result.data.inner.score == 0:
+                    raise Exception(f"Failed to solve handlers for {function}: " + str(result.data.inner))
+                result_dict[function] = result.data.inner
+        span.end(output=result_dict)
+        return result_dict
+
+
+class FsmState(str, enum.Enum):
+    TYPESPEC = "typespec"
+    DRIZZLE = "drizzle"
+    TYPESCRIPT = "typescript"
+    HANDLER_TESTS = "handler_tests"
+    HANDLERS = "handlers"
+    COMPLETE = "complete"
+    FAILURE = "failure"
+    WAIT = "wait"
+
+
+class FsmEvent(str, enum.Enum):
+    PROMPT = "PROMPT"
+    CONFIRM = "CONFIRM"
+
+
+from typing import TypedDict, NotRequired
+
+
+class FSMContext(TypedDict):
+    description: str
+    capabilities: NotRequired[list[str]]
+    typespec_schema: NotRequired[typespec.Success]
+    drizzle_schema: NotRequired[drizzle.Success]
+    typescript_schema: NotRequired[typescript.Success]
+    handler_tests: NotRequired[dict[str, handler_tests.Success]]
+    handlers: NotRequired[dict[str, handlers.Success | handlers.TestsError]]
+
+
 
 class Application:
-    def __init__(self, client: AnthropicBedrock, compiler: Compiler, branch_factor: int = 2, max_depth: int = 4, max_workers: int = 5, dfs_budget: int = 20, thinking_budget: int = 0):
-        self.client = TracingClient(client, thinking_budget=thinking_budget)
+    def __init__(self, client: AnthropicBedrock, compiler: Compiler):
+        self.client = client
         self.compiler = compiler
-        self.jinja_env = jinja2.Environment()
-        self.BRANCH_FACTOR = branch_factor
-        self.MAX_DEPTH = max_depth
-        self.MAX_WORKERS = max_workers
-        self.DFS_BUDGET = dfs_budget
-
-
-    @observe(capture_output=False)
-    def prepare_bot(self, prompts: list[str], bot_id: str | None = None, capabilities: list[str] | None = None, *args, **kwargs):
-        langfuse_context.update_current_trace(user_id=os.environ.get("USER_ID", socket.gethostname()))
-        if bot_id is not None:
-            langfuse_context.update_current_observation(metadata={"bot_id": bot_id})
-
-        print("Compiling TypeSpec...")
-        typespec = self._make_typespec(prompts)
-        if typespec.error_output is not None:
-            raise Exception(f"Failed to generate typespec: {typespec.error_output}")
-        typespec_definitions = typespec.typespec_definitions
-
-        if feature_flags.gherkin:
-            print("Compiling Gherkin Test Cases...")
-            gherkin = self._make_testcases(typespec_definitions)
-            if gherkin.error_output is not None:
-                raise Exception(f"Failed to generate gherkin test cases: {gherkin.error_output}")
-        else:
-            gherkin = GherkinOut(None, None, None)
-
-        langfuse_context.update_current_observation(
-            output = {
-                "typespec": typespec.__dict__,
-                "gherkin": gherkin.__dict__,
-                "scenarios": {f.name: f.scenario for f in typespec.llm_functions}, # TODO: get gherkin scenarios from typespec
-                "capabilities": capabilities,
-            },
-            metadata = {
-                "typespec_ok": typespec.error_output is None,
-                "gherkin_ok": gherkin.error_output is None,
-            },
-        )
-        # Create capabilities object only if capabilities is not None
-        capabilities_out = CapabilitiesOut(capabilities if capabilities is not None else [], None)
-        return ApplicationOut(refined_description=None,
-                              capabilities=capabilities_out, 
-                              typespec=typespec,
-                              drizzle=None,
-                              handlers={}, 
-                              handler_tests={}, 
-                              typescript_schema=None,
-                              gherkin=gherkin,
-                              trace_id=langfuse_context.get_current_trace_id())
+        self.langfuse_client = Langfuse()
     
-    @observe(capture_output=False)
-    def update_bot(self, typespecSchema: str, bot_id: str | None = None, capabilities: list[str] | None = None, *args, **kwargs):
-        langfuse_context.update_current_trace(user_id=os.environ.get("USER_ID", socket.gethostname()))
-        if bot_id is not None:
-            langfuse_context.update_current_observation(metadata={"bot_id": bot_id})
-        
-        # Create a refined description from the typespec
-        print("Creating prompt from TypeSpec...")
-        app_prompt = RefineOut(typespecSchema, None)
-        
-        # We already have the typespec, so create a TypespecOut object
-        print("Processing TypeSpec...")
-        
-        # TODO: fix with separating typespec parsing from typespec generation
-        _, typespec_definitions, llm_functions = TypespecTaskNode.parse_output(f"<reasoning>...</reasoning><typespec>{typespecSchema}</typespec>")
-        
-        typespec_out = TypespecOut(
-            reasoning="Imported from existing typespec",
-            typespec_definitions=typespec_definitions,
-            llm_functions=llm_functions,
-            error_output=None
+    def prepare_bot(self, prompts: list[str], bot_id: str | None = None, capabilities: list[str] | None = None, *args, **kwargs) -> ApplicationPrepareOut:
+        trace = self.langfuse_client.trace(
+            id=kwargs.get("langfuse_observation_id", uuid.uuid4().hex),
+            name="create_bot",
+            user_id=os.environ.get("USER_ID", socket.gethostname()),
+            metadata={"bot_id": bot_id},
         )
+
+        fsm_context: FSMContext = {"description": "", "user_requests": prompts}
+        fsm_states = self.make_fsm_states(trace.id, trace.id)
+        fsm = statemachine.StateMachine[FSMContext](fsm_states, fsm_context)
+        fsm.send(FsmEvent.PROMPT)
+        print(fsm.context)
+
+        result = {"capabilities": capabilities}
+        error_output = None
         
-        if feature_flags.gherkin:
-            print("Generating Gherkin Test Cases...")
-            gherkin = self._make_testcases(typespec_definitions)
-            if gherkin.error_output is not None:
-                raise Exception(f"Failed to generate gherkin test cases: {gherkin.error_output}")
-        else:
-            gherkin = GherkinOut(None, None, None)
+        match fsm.stack_path[-1]:
+            case FsmState.COMPLETE:
+                typespec_schema = fsm.context["typespec_schema"]
+                result.update({"typespec": typespec_schema})
+            case FsmState.FAILURE:
+                error_output = fsm.context["error"]
+                result.update({"error": error_output})
+            case _:
+                raise ValueError(F"Unexpected state: {fsm.stack_path}")
         
-        print("Generating Typescript Schema...")
-        typescript_schema = self._make_typescript_schema(typespec_definitions)
-        if typescript_schema.error_output is not None:
-            raise Exception(f"Failed to generate typescript schema: {typescript_schema.error_output}")
-        typescript_schema_definitions = typescript_schema.typescript_schema
-        typescript_functions = typescript_schema.functions
+        trace.update(output=result)
         
-        print("Generating Drizzle Schema...")
-        drizzle = self._make_drizzle(typespec_definitions)
-        if drizzle.error_output is not None:
-            raise Exception(f"Failed to generate drizzle schema: {drizzle.error_output}")
-        drizzle_schema = drizzle.drizzle_schema
-        
-        print("Generating Handler Tests...")
-        handler_test_dict = self._make_handler_tests(typescript_functions, typescript_schema_definitions, drizzle_schema)
-        
-        print("Generating Handlers...")
-        handlers = self._make_handlers(typescript_functions, handler_test_dict, typespec_definitions, typescript_schema_definitions, drizzle_schema)
-        
-        updated_capabilities = capabilities if capabilities is not None else []
-        
-        langfuse_context.update_current_observation(
-            output = {
-                "refined_description": app_prompt.__dict__,
-                "typespec": typespec_out.__dict__,
-                "typescript_schema": typescript_schema.__dict__,
-                "drizzle": drizzle.__dict__,
-                "handlers": {k: v.__dict__ for k, v in handlers.items()},
-                "handler_tests": {k: v.__dict__ for k, v in handler_test_dict.items()},
-                "gherkin": gherkin.__dict__,
-                "scenarios": {f.name: f.scenario for f in typespec_out.llm_functions},
-                "capabilities": updated_capabilities,
-            },
-            metadata = {
-                "refined_description_ok": app_prompt.error_output is None,
-                "typespec_ok": True,  # We trust the provided typespec
-                "typescript_schema_ok": typescript_schema.error_output is None,
-                "drizzle_ok": drizzle.error_output is None,
-                "all_handlers_ok": all(handler.error_output is None for handler in handlers.values()),
-                "all_handler_tests_ok": all(handler_test.error_output is None for handler_test in handler_test_dict.values()),
-                "gherkin_ok": gherkin.error_output is None,
-                "is_update": True,
-            },
+        refined = RefineOut(refined_description="", error_output=error_output)
+        return ApplicationPrepareOut(
+            refined_description=refined,
+            capabilities=CapabilitiesOut(capabilities if capabilities is not None else [], error_output),
+            typespec=TypespecOut(
+                reasoning=getattr(result.get("typespec"), "reasoning", None),
+                typespec_definitions=getattr(result.get("typespec"), "typespec", None),
+                llm_functions=getattr(result.get("typespec"), "llm_functions", None),
+                error_output=error_output
+            )
         )
+    
+    def update_bot(self, typespec_schema: str, bot_id: str | None = None, capabilities: list[str] | None = None, *args, **kwargs) -> ApplicationOut:
+        trace = self.langfuse_client.trace(
+            id=kwargs.get("langfuse_observation_id", uuid.uuid4().hex),
+            name="update_bot",
+            user_id=os.environ.get("USER_ID", socket.gethostname()),
+            metadata={"bot_id": bot_id},
+        )
+
+        # hack typespec output
+        print(f"Typespec schema: {typespec_schema}")
+        # Check if typespec already has tags
+        if not (("<reasoning>" in typespec_schema and "</reasoning>" in typespec_schema) and 
+                ("<typespec>" in typespec_schema and "</typespec>" in typespec_schema)):
+            # Wrap the schema in the expected format
+            typespec_schema = f"""
+            <reasoning>
+            Auto-generated reasoning.
+            </reasoning>
+            
+            <typespec>
+            {typespec_schema}
+            </typespec>
+            """
+        reasoning, typespec_parsed, llm_functions = typespec.TypespecMachine.parse_output(typespec_schema)
+        typespec_input = typespec.Success(reasoning, typespec_parsed, llm_functions, {"exit_code": 0})
+
+        fsm_context: FSMContext = {"description": "", "typespec_schema": typespec_input}
+        fsm_states = self.make_fsm_states(trace.id, trace.id)
+        fsm = statemachine.StateMachine[FSMContext](fsm_states, fsm_context)
+        fsm.send(FsmEvent.CONFIRM)
+
+        result = {"capabilities": capabilities}
+        error_output = None
         
-        capabilities_out = CapabilitiesOut(updated_capabilities, None)
+        match fsm.stack_path[-1]:
+            case FsmState.COMPLETE:
+                result.update(fsm.context)
+            case FsmState.FAILURE:
+                error_output = fsm.context["error"]
+                result.update({"error": error_output})
+            case _:
+                raise ValueError(F"Unexpected state: {fsm.stack_path}")
+        
+        trace.update(output=result)
+        
+        # Create dictionary comprehensions for handlers and tests
+        handler_tests_dict = {
+            name: HandlerTestsOut(
+                name=name,
+                content=getattr(test, "source", None),
+                error_output=error_output
+            ) for name, test in result.get("handler_tests", {}).items()
+        }
+        
+        handlers_dict = {
+            name: HandlerOut(
+                name=name,
+                handler=getattr(handler, "source", None),
+                argument_schema=None,
+                error_output=error_output
+            ) for name, handler in result.get("handlers", {}).items()
+        }
+        
+        # Create TypescriptOut conditionally
+        typescript_result = result.get("typescript_schema")
+        typescript_out = None
+        if typescript_result:
+            typescript_out = TypescriptOut(
+                reasoning=getattr(typescript_result, "reasoning", None),
+                typescript_schema=getattr(typescript_result, "typescript_schema", None),
+                functions=getattr(typescript_result, "functions", None),
+                error_output=error_output
+            )
+        
         return ApplicationOut(
-            app_prompt, 
-            capabilities_out, 
-            typespec_out, 
-            drizzle, 
-            handlers, 
-            handler_test_dict, 
-            typescript_schema, 
-            gherkin, 
-            langfuse_context.get_current_trace_id()
+            refined_description=RefineOut(refined_description="", error_output=error_output),
+            capabilities=CapabilitiesOut(capabilities if capabilities is not None else [], error_output),
+            typespec=TypespecOut(
+                reasoning=getattr(result.get("typespec_schema"), "reasoning", None),
+                typespec_definitions=getattr(result.get("typespec_schema"), "typespec", None),
+                llm_functions=getattr(result.get("typespec_schema"), "llm_functions", None),
+                error_output=error_output
+            ),
+            drizzle=DrizzleOut(
+                reasoning=getattr(result.get("drizzle_schema"), "reasoning", None),
+                drizzle_schema=getattr(result.get("drizzle_schema"), "drizzle_schema", None),
+                error_output=error_output
+            ),
+            handlers=handlers_dict,
+            handler_tests=handler_tests_dict,
+            typescript_schema=typescript_out,
+            gherkin=GherkinOut(reasoning=None, gherkin=None, error_output=error_output),
+            trace_id=trace.id
         )
 
+    def make_fsm_states(self, trace_id: str, observation_id: str) -> statemachine.State:
+        typespec_actor = TypespecActor(self.client, self.compiler, self.langfuse_client, trace_id, observation_id)
+        drizzle_actor = DrizzleActor(self.client, self.compiler, self.langfuse_client, trace_id, observation_id)
+        typescript_actor = TypescriptActor(self.client, self.compiler, self.langfuse_client, trace_id, observation_id)
+        handler_tests_actor = HandlerTestsActor(self.client, self.compiler, self.langfuse_client, trace_id, observation_id)
+        handlers_actor = HandlersActor(self.client, self.compiler, self.langfuse_client, trace_id, observation_id)
+
+        states: statemachine.State = {
+            "on": {
+                FsmEvent.PROMPT: FsmState.TYPESPEC,
+                FsmEvent.CONFIRM: FsmState.DRIZZLE,
+            },
+            "states": {
+                FsmState.TYPESPEC: {
+                    "invoke": {
+                        "src": typespec_actor,
+                        "input_fn": lambda ctx: (ctx["user_requests"],),
+                        "on_done": {
+                            "target": FsmState.WAIT,
+                            "actions": [lambda ctx, event: ctx.update({"typespec_schema": event})],
+                        },
+                        "on_error": {
+                            "target": FsmState.FAILURE,
+                            "actions": [lambda ctx, event: ctx.update({"error": event})],
+                        },
+                    },
+                },
+                FsmState.DRIZZLE: {
+                    "invoke": {
+                        "src": drizzle_actor,
+                        "input_fn": lambda ctx: (ctx["typespec_schema"].typespec,),
+                        "on_done": {
+                            "target": FsmState.TYPESCRIPT,
+                            "actions": [lambda ctx, event: ctx.update({"drizzle_schema": event})],
+                        },
+                        "on_error": {
+                            "target": FsmState.FAILURE,
+                            "actions": [lambda ctx, event: ctx.update({"error": event})],
+                        },
+                    }
+                },
+                FsmState.TYPESCRIPT: {
+                    "invoke": {
+                        "src": typescript_actor,
+                        "input_fn": lambda ctx: (ctx["typespec_schema"].typespec,),
+                        "on_done": {
+                            "target": FsmState.HANDLER_TESTS,
+                            "actions": [lambda ctx, event: ctx.update({"typescript_schema": event})],
+                        },
+                        "on_error": {
+                            "target": FsmState.FAILURE,
+                            "actions": [lambda ctx, event: ctx.update({"error": event})],
+                        },
+                    }
+                },
+                FsmState.HANDLER_TESTS: {
+                    "invoke": {
+                        "src": handler_tests_actor,
+                        "input_fn": lambda ctx: (ctx["typescript_schema"].functions, ctx["typescript_schema"].typescript_schema, ctx["drizzle_schema"].drizzle_schema),
+                        "on_done": {
+                            "target": FsmState.HANDLERS,
+                            "actions": [lambda ctx, event: ctx.update({"handler_tests": event})],
+                        },
+                        "on_error": {
+                            "target": FsmState.FAILURE,
+                            "actions": [lambda ctx, event: ctx.update({"error": event})],
+                        },
+                    }
+                },
+                FsmState.HANDLERS: {
+                    "invoke": {
+                        "src": handlers_actor,
+                        "input_fn": lambda ctx: (ctx["typescript_schema"].functions, ctx["typescript_schema"].typescript_schema, ctx["drizzle_schema"].drizzle_schema, ctx["handler_tests"]),
+                        "on_done": {
+                            "target": FsmState.COMPLETE,
+                            "actions": [lambda ctx, event: ctx.update({"handlers": event})],
+                        },
+                        "on_error": {
+                            "target": FsmState.FAILURE,
+                            "actions": [lambda ctx, event: ctx.update({"error": event})],
+                        },
+                    }
+                },
+                FsmState.COMPLETE: {},
+                FsmState.FAILURE: {},
+                FsmState.WAIT: {},
+            }
+        }
     
-
-    @observe(capture_output=False)
-    def create_bot(self, application_description: str, bot_id: str | None = None, capabilities: list[str] | None = None, *args, **kwargs):
-        langfuse_context.update_current_trace(user_id=os.environ.get("USER_ID", socket.gethostname()))
-        if bot_id is not None:
-            langfuse_context.update_current_observation(metadata={"bot_id": bot_id})
-
-        if feature_flags.refine_initial_prompt:
-            print("Refining Initial Description...")
-            app_prompt = self._refine_initial_prompt(application_description)
-        else:
-            print("Skipping Initial Description Refinement")
-            app_prompt = RefineOut(application_description, None)
-
-        print("Compiling TypeSpec...")
-        typespec = self._make_typespec(app_prompt.refined_description)
-        if typespec.error_output is not None:
-            raise Exception(f"Failed to generate typespec: {typespec.error_output}")
-        typespec_definitions = typespec.typespec_definitions
-
-        if feature_flags.gherkin:
-            print("Compiling Gherkin Test Cases...")
-            gherkin = self._make_testcases(typespec_definitions)
-            if gherkin.error_output is not None:
-                raise Exception(f"Failed to generate gherkin test cases: {gherkin.error_output}")
-        else:
-            gherkin = GherkinOut(None, None, None)
-
-        print("Compiling Typescript Schema Definitions...")
-        typescript_schema = self._make_typescript_schema(typespec_definitions)
-        if typescript_schema.error_output is not None:
-            raise Exception(f"Failed to generate typescript schema: {typescript_schema.error_output}")
-        typescript_schema_definitions = typescript_schema.typescript_schema
-        typescript_functions = typescript_schema.functions
-
-        print("Compiling Drizzle...")
-        drizzle = self._make_drizzle(typespec_definitions)
-        if drizzle.error_output is not None:
-            raise Exception(f"Failed to generate drizzle schema: {drizzle.error_output}")
-        drizzle_schema = drizzle.drizzle_schema
-
-        print("Compiling Handler Tests...")
-        handler_test_dict = self._make_handler_tests(typescript_functions, typescript_schema_definitions, drizzle_schema)
-
-        print("Compiling Handlers...")
-        handlers = self._make_handlers(typescript_functions, handler_test_dict, typespec_definitions, typescript_schema_definitions, drizzle_schema)
-
-        langfuse_context.update_current_observation(
-            output = {
-                "refined_description": app_prompt.__dict__,
-                "typespec": typespec.__dict__,
-                "typescript_schema": typescript_schema.__dict__,
-                "drizzle": drizzle.__dict__,
-                "handlers": {k: v.__dict__ for k, v in handlers.items()},
-                "handler_tests": {k: v.__dict__ for k, v in handler_test_dict.items()},
-                "gherkin": gherkin.__dict__,
-                "scenarios": {f.name: f.scenario for f in typespec.llm_functions},
-                "capabilities": capabilities,
-            },
-            metadata = {
-                "refined_description_ok": app_prompt.error_output is None,
-                "typespec_ok": typespec.error_output is None,
-                "typescript_schema_ok": typescript_schema.error_output is None,
-                "drizzle_ok": drizzle.error_output is None,
-                "all_handlers_ok": all(handler.error_output is None for handler in handlers.values()),
-                "all_handler_tests_ok": all(handler_test.error_output is None for handler_test in handler_test_dict.values()),
-                "gherkin_ok": gherkin.error_output is None,
-            },
-        )
-        # Create capabilities object only if capabilities is not None
-        capabilities_out = CapabilitiesOut(capabilities if capabilities is not None else [], None)
-        return ApplicationOut(app_prompt, capabilities_out, typespec, drizzle, handlers, handler_test_dict, typescript_schema, gherkin, langfuse_context.get_current_trace_id())
-
-
-    @observe(capture_input=False, capture_output=False)
-    def _make_typescript_schema(self, typespec_definitions: str):
-        content = self.jinja_env.from_string(typescript.PROMPT).render(typespec_definitions=typespec_definitions)
-        message = {"role": "user", "content": content}
-        with typescript.TypescriptTaskNode.platform(self.client, self.compiler, self.jinja_env):
-            ts_data = typescript.TypescriptTaskNode.run([message], init=True)
-            ts_root = typescript.TypescriptTaskNode(ts_data)
-            ts_solution = common.bfs(ts_root, self.MAX_DEPTH, self.BRANCH_FACTOR, self.MAX_WORKERS)
-        match ts_solution.data.output:
-            case Exception() as e:
-                return TypescriptOut(None, None, None, str(e))
-            case output:
-                functions = [TypescriptFunction(name=f.name, argument_type=f.argument_type, argument_schema=f.argument_schema, return_type=f.return_type) for f in output.functions]
-                return TypescriptOut(output.reasoning, output.typescript_schema, functions, output.error_or_none)
-
-    @observe(capture_input=False, capture_output=False)
-    def _make_testcases(self, typespec_definitions: str):
-        content = self.jinja_env.from_string(app_testcases.PROMPT).render(typespec_schema=typespec_definitions)
-        message = {"role": "user", "content": content}
-        with app_testcases.GherkinTaskNode.platform(self.client, self.compiler, self.jinja_env):
-            tc_data = app_testcases.GherkinTaskNode.run([message])
-            tc_root = app_testcases.GherkinTaskNode(tc_data)
-            tc_solution = common.bfs(tc_root, self.MAX_DEPTH, self.BRANCH_FACTOR, self.MAX_WORKERS)
-        match tc_solution.data.output:
-            case Exception() as e:
-                return GherkinOut(None, None, str(e))
-            case output:
-                return GherkinOut(output.reasoning, output.gherkin, output.error_or_none)
-
-    @observe(capture_input=False, capture_output=False)
-    def _make_typespec(self, prompts: list[str]):
-        content = self.jinja_env.from_string(typespec.PROMPT).render(user_requests=prompts)
-        message = {"role": "user", "content": content}
-        with typespec.TypespecTaskNode.platform(self.client, self.compiler, self.jinja_env):
-            tsp_data = typespec.TypespecTaskNode.run([message], init=True)
-            tsp_root = typespec.TypespecTaskNode(tsp_data)
-            tsp_solution = common.bfs(tsp_root, self.MAX_DEPTH, self.BRANCH_FACTOR, self.MAX_WORKERS)
-        match tsp_solution.data.output:
-            case Exception() as e:
-                return TypespecOut(None, None, None, str(e))
-            case output:
-                return TypespecOut(output.reasoning, output.typespec_definitions, output.llm_functions, output.error_or_none)
-
-    @observe(capture_input=False, capture_output=False)
-    def _make_drizzle(self, typespec_definitions: str):
-        content = self.jinja_env.from_string(drizzle.PROMPT).render(typespec_definitions=typespec_definitions)
-        message = {"role": "user", "content": content}
-        with drizzle.DrizzleTaskNode.platform(self.client, self.compiler, self.jinja_env):
-            dzl_data = drizzle.DrizzleTaskNode.run([message], init=True)
-            dzl_root = drizzle.DrizzleTaskNode(dzl_data)
-            dzl_solution = common.bfs(dzl_root, self.MAX_DEPTH, self.BRANCH_FACTOR, self.MAX_WORKERS)
-        match dzl_solution.data.output:
-            case Exception() as e:
-                return DrizzleOut(None, None, str(e))
-            case output:
-                return DrizzleOut(output.reasoning, output.drizzle_schema, output.error_or_none)
-
-    @observe(capture_input=False, capture_output=False)
-    def _make_handler_test(
-        self,
-        content: str,
-        function_name: str,
-        typescript_schema: str,
-        drizzle_schema: str,
-        *args,
-        **kwargs,
-    ) -> HandlerTestsOut:
-        prompt_params = {
-            "function_name": function_name,
-            "typescript_schema": typescript_schema,
-            "drizzle_schema": drizzle_schema,
-        }
-        message = {"role": "user", "content": content}
-        test_data = handler_tests.HandlerTestTaskNode.run([message], init=True, **prompt_params)
-        test_root = handler_tests.HandlerTestTaskNode(test_data)
-        test_solution = common.dfs(test_root, 5, self.BRANCH_FACTOR, self.DFS_BUDGET, **prompt_params)
-        match test_solution.data.output:
-            case Exception() as e:
-                return HandlerTestsOut(None, None, str(e))
-            case output:
-                return HandlerTestsOut(function_name, output.content, None)
-
-    @observe(capture_input=False, capture_output=False)
-    def _make_handler_tests(
-        self,
-        llm_functions: list[typescript.FunctionDeclaration],
-        typescript_schema: str,
-        drizzle_schema: str,
-    ) -> dict[str, HandlerTestsOut]:
-        trace_id = langfuse_context.get_current_trace_id()
-        observation_id = langfuse_context.get_current_observation_id()
-        results: dict[str, HandlerTestsOut] = {}
-        with handler_tests.HandlerTestTaskNode.platform(self.client, self.compiler, self.jinja_env):
-            with concurrent.futures.ThreadPoolExecutor(self.MAX_WORKERS) as executor:
-                future_to_handler: dict[concurrent.futures.Future[HandlerTestsOut], str] = {}
-                for function in llm_functions:
-                    test_prompt_params = {
-                        "function_name": function.name,
-                        "typescript_schema": typescript_schema,
-                        "drizzle_schema": drizzle_schema,
-                    }
-                    content = self.jinja_env.from_string(handler_tests.PROMPT).render(**test_prompt_params)
-                    future_to_handler[executor.submit(
-                        self._make_handler_test,
-                        content,
-                        function.name,
-                        typescript_schema,
-                        drizzle_schema,
-                        langfuse_parent_trace_id=trace_id,
-                        langfuse_parent_observation_id=observation_id,
-                    )] = function.name
-                for future in concurrent.futures.as_completed(future_to_handler):
-                    function_name, result = future_to_handler[future], future.result()
-                    results[function_name] = result
-        return results
-
-    @observe(capture_input=False, capture_output=False)
-    def _make_handler(
-        self,
-        content: str,
-        function_name: str,
-        argument_type: str,
-        argument_schema: str,
-        typespec_definitions: str,
-        typescript_schema: str,
-        drizzle_schema: str,
-        test_suite: str | None,
-        *args,
-        **kwargs,
-    ) -> HandlerOut:
-        prompt_params = {
-            "function_name": function_name,
-            "argument_type": argument_type,
-            "argument_schema": argument_schema,
-            "typespec_schema": typespec_definitions,
-            "typescript_schema": typescript_schema,
-            "drizzle_schema": drizzle_schema,
-            "test_suite": test_suite,
-        }
-        message = {"role": "user", "content": content}
-        output = handlers.HandlerTaskNode.run([message], init=True, **prompt_params)
-        root_node = handlers.HandlerTaskNode(output)
-        solution = common.dfs(root_node, 5, self.BRANCH_FACTOR, self.DFS_BUDGET, **prompt_params)
-        match solution.data.output:
-            case Exception() as e:
-                return HandlerOut(None, None, None, str(e))
-            case output:
-                return HandlerOut(output.name, output.handler, argument_schema, None)
-
-    @observe(capture_input=False, capture_output=False)
-    def _make_handlers(self, llm_functions: list[typescript.FunctionDeclaration], handler_tests: dict[str, HandlerTestsOut], typespec_definitions: str, typescript_schema: str, drizzle_schema: str):
-        trace_id = langfuse_context.get_current_trace_id()
-        observation_id = langfuse_context.get_current_observation_id()
-        results: dict[str, HandlerOut] = {}
-        with handlers.HandlerTaskNode.platform(self.client, self.compiler, self.jinja_env):
-            with concurrent.futures.ThreadPoolExecutor(self.MAX_WORKERS) as executor:
-                future_to_handler: dict[concurrent.futures.Future[HandlerOut], str] = {}
-                for function in llm_functions:
-                    match handler_tests.get(function.name):
-                        case HandlerTestsOut(_, test_content, None) if test_content is not None:
-                            test_suite = test_content
-                        case _:
-                            test_suite = None
-                    handler_prompt_params = {
-                        "function_name": function.name,
-                        "argument_type": function.argument_type,
-                        "argument_schema": function.argument_schema,
-                        "typespec_schema": typespec_definitions,
-                        "typescript_schema": typescript_schema,
-                        "drizzle_schema": drizzle_schema,
-                        "test_suite": test_suite,
-                    }
-                    content = self.jinja_env.from_string(handlers.PROMPT).render(**handler_prompt_params)
-                    future_to_handler[executor.submit(
-                        self._make_handler,
-                        content,
-                        function.name,
-                        function.argument_type,
-                        function.argument_schema,
-                        typespec_definitions,
-                        typescript_schema,
-                        drizzle_schema,
-                        test_suite,
-                        langfuse_parent_trace_id=trace_id,
-                        langfuse_parent_observation_id=observation_id,
-                    )] = function.name
-                for future in concurrent.futures.as_completed(future_to_handler):
-                    function_name, result = future_to_handler[future], future.result()
-                    results[function_name] = result
-        return results
-
-    @observe(capture_input=False, capture_output=False)
-    def _refine_initial_prompt(self, initial_description: str):
-        with refine.RefinementTaskNode.platform(self.client, self.jinja_env):
-            refinement_data = refine.RefinementTaskNode.run([{"role": "user",
-                "content": self.jinja_env.from_string(refine.PROMPT).render(application_description=initial_description)
-            }])
-            match refinement_data.output:
-                case Exception() as e:
-                    return RefineOut(initial_description, str(e))
-                case output:
-                    return RefineOut(output.requirements, output.error_or_none)
+        return states

@@ -68,7 +68,10 @@ def main(prefix: str, save_dir: str | None = None):
 
         application = Application(client, compiler)
 
-        my_bot = application.create_bot(prompt, f"{prefix}_{name}")
+        # First prepare the bot
+        prepared_bot = application.prepare_bot([prompt], f"{prefix}_{name}")
+        # Then update with the prepared bot's typespec
+        my_bot = application.update_bot(prepared_bot.typespec.typespec_definitions, f"{prefix}_{name}")
         print("Bot created:", my_bot)
 
         if save_dir:

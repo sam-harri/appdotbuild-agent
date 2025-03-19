@@ -109,9 +109,14 @@ def generate_bot(write_url: str, read_url: str, prompts: list[str], trace_id: st
         application = Application(client, compiler)
         interpolator = Interpolator(".")
         logger.info(f"Creating bot with prompts: {prompts}")
-        bot = application.create_bot(prompts[0].prompt, bot_id, langfuse_observation_id=trace_id, capabilities=capabilities)
+        # Extract prompt text if it's a Prompt object, otherwisse use as is
+        prompt_texts = [p.prompt if hasattr(p, 'prompt') else p for p in prompts]
+        bot = application.prepare_bot(prompt_texts, bot_id, langfuse_observation_id=trace_id, capabilities=capabilities)
+        logger.info(f"Prepared bot {tmpdir}")
+        updated_bot = application.update_bot(bot.typespec.typespec_schema, bot_id, langfuse_observation_id=trace_id, capabilities=capabilities)
+        logger.info(f"Updated bot {tmpdir}")
+        interpolator.bake(updated_bot, tmpdir)
         logger.info(f"Baked bot to {tmpdir}")
-        interpolator.bake(bot, tmpdir)
         zipfile = shutil.make_archive(
             base_name=tmpdir,
             format="zip",
@@ -125,14 +130,14 @@ def generate_bot(write_url: str, read_url: str, prompts: list[str], trace_id: st
 def generate_update_bot(write_url: str, read_url: str, typespec: str, trace_id: str, bot_id: str | None, capabilities: list[str] | None = None):
     try:
         logger.info(f"Staring background job to update bot")
+        application = Application(client, compiler)
+        interpolator = Interpolator(".")
+        logger.info(f"Updating bot with typespec: {typespec}")
+        
+        bot = application.update_bot(typespec, bot_id, langfuse_observation_id=trace_id, capabilities=capabilities)
+        logger.info(f"Updated bot successfully")
+        
         with tempfile.TemporaryDirectory() as tmpdir:
-            application = Application(client, compiler)
-            interpolator = Interpolator(".")
-            logger.info(f"Updating bot with typespec: {typespec}")
-            
-            bot = application.update_bot(typespec, bot_id, langfuse_observation_id=trace_id, capabilities=capabilities)
-            logger.info(f"Updated bot successfully")
-            
             # download the bot from read_url
             if read_url:
                 try:
@@ -197,7 +202,8 @@ def prepare(request: PrepareRequest):
 def compile(request: ReBuildRequest, background_tasks: BackgroundTasks):
     trace_id = uuid.uuid4().hex
     background_tasks.add_task(generate_update_bot, request.writeUrl, request.readUrl, request.typespecSchema, trace_id, request.botId, request.capabilities)
-    return BuildResponse(status="success", message="done", trace_id=trace_id)
+    message = f"Your bot's implementation is being updated in the background"
+    return BuildResponse(status="success", message=message, trace_id=trace_id)
 
 
 # TODO: remove this once we have the new build endpoint
