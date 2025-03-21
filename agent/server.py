@@ -194,7 +194,9 @@ def prepare(request: PrepareRequest):
     bot = prepare_bot(request.prompts, trace_id, request.botId, request.capabilities)
     typespec_dict = get_typespec_metadata(bot)
     scenarios = get_scenarios_message(bot)
-    message = f"Your bot's type specification has been prepared. Use cases implemented: {scenarios}"
+    message = f"""Your bot's type specification has been prepared. 
+Use cases implemented: {scenarios}.
+Please let me know if these use cases match what you're looking for, and if you would like me to start implementing the application."""
     return BuildResponse(status="success", message=message, trace_id=trace_id, metadata=typespec_dict)
 
 
