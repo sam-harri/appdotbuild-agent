@@ -1,34 +1,34 @@
-from typing import Any, Callable, NotRequired, Protocol, TypedDict
+from typing import Any, Awaitable, Callable, NotRequired, Protocol, TypedDict
 
 
 class Actor(Protocol):
-    def execute(self, *args, **kwargs) -> Any:
+    async def execute(self, *args, **kwargs) -> Any:
         ...
 
 
 class InvokeCallback[T](TypedDict):
     target: str
-    actions: NotRequired[list[Callable[[T, Any], Any]]] # = []
+    actions: NotRequired[list[Callable[[T, Any], Awaitable[Any]]]] # = []
 
 
 class Invoke[T](TypedDict):
     src: Actor
     input_fn: Callable[[T], Any]
-    on_done: NotRequired[InvokeCallback]
-    on_error: NotRequired[InvokeCallback]
+    on_done: NotRequired[InvokeCallback[T]]
+    on_error: NotRequired[InvokeCallback[T]]
 
 
 class AlwaysRun[T](TypedDict):
     target: str
-    guard: NotRequired[Callable[[T], bool]]
-    actions: NotRequired[list[Callable[[T], Any]]]
+    guard: NotRequired[Callable[[T], Awaitable[bool]]]
+    actions: NotRequired[list[Callable[[T], Awaitable[Any]]]]
 
 
 class State[T](TypedDict):
-    entry: NotRequired[list[Callable[[T], Any]]]
+    entry: NotRequired[list[Callable[[T], Awaitable[Any]]]]
     invoke: NotRequired[Invoke[T]]
     on: NotRequired[dict[str, str]]
-    exit: NotRequired[list[Callable[[T], Any]]]
+    exit: NotRequired[list[Callable[[T], Awaitable[Any]]]]
     always: NotRequired[AlwaysRun[T] | list[AlwaysRun[T]]]
     states: NotRequired[dict[str, "State[T]"]]
     initial: NotRequired[str]
@@ -41,22 +41,22 @@ class StateMachine[T]:
         self.state_stack: list[State[T]] = [root]
         self._queued_transition: str | None = None
     
-    def send(self, event: str):
+    async def send(self, event: str):
         for state in reversed(self.state_stack):
             if "on" in state and event in state["on"]:
                 self._queued_transition = state["on"][event]
-                self._process_transitions()
+                await self._process_transitions()
                 return
         raise RuntimeError(f"Invalid event: {event}, stack: {self.stack_path}")
     
-    def _process_transitions(self):
+    async def _process_transitions(self):
         while self._queued_transition:
             print("Processing transition:", self.stack_path, self._queued_transition)
             next_state = self._queued_transition
             self._queued_transition = None
-            self._transition(next_state)
+            await self._transition(next_state)
     
-    def _transition(self, next_state: str):
+    async def _transition(self, next_state: str):
         exit_stack = []
         while self.state_stack:
             parent_state = self.state_stack.pop()
@@ -65,10 +65,10 @@ class StateMachine[T]:
                 continue
             target_state = parent_state["states"][next_state]
             for state in reversed(exit_stack):
-                self._run_exit(state)
-            self._run_entry(target_state)
-            self._run_invoke(target_state)
-            self._run_always(target_state)
+                await self._run_exit(state)
+            await self._run_entry(target_state)
+            await self._run_invoke(target_state)
+            await self._run_always(target_state)
             self.state_stack.extend([parent_state, target_state]) # put target state on stack
             return
         self.state_stack.extend(reversed(exit_stack)) # restore stack
@@ -86,40 +86,40 @@ class StateMachine[T]:
                     break
         return path
     
-    def _run_entry(self, state: State[T]):
+    async def _run_entry(self, state: State[T]):
         if "entry" in state:
             for action in state["entry"]:
-                action(self.context)
+                await action(self.context)
     
-    def _run_exit(self, state: State[T]):
+    async def _run_exit(self, state: State[T]):
         if "exit" in state:
             for action in state["exit"]:
-                action(self.context)
+                await action(self.context)
     
-    def _run_invoke(self, state: State[T]):
+    async def _run_invoke(self, state: State[T]):
         if "invoke" in state:
             invoke = state["invoke"]
             try:
                 args = invoke["input_fn"](self.context)
-                event = invoke["src"].execute(*args)
+                event = await invoke["src"].execute(*args)
                 if "on_done" in invoke:
                     self._queued_transition = invoke["on_done"]["target"]
                     for action in invoke["on_done"].get("actions", []):
-                        action(self.context, event)
+                        await action(self.context, event)
             except Exception as e:
                 if "on_error" in invoke:
                     self._queued_transition = invoke["on_error"]["target"]
                     for action in invoke["on_error"].get("actions", []):
-                        action(self.context, e)
+                        await action(self.context, e)
                 else:
                     raise e
     
-    def _run_always(self, state: State[T]):
+    async def _run_always(self, state: State[T]):
         if "always" in state:
             branches = state["always"] if isinstance(state["always"], list) else [state["always"]]
             for always in branches:
-                if "guard" not in always or always["guard"](self.context):
+                if "guard" not in always or await always["guard"](self.context):
                     self._queued_transition = always["target"]
                     for action in always.get("actions", []):
-                        action(self.context)
+                        await action(self.context)
                     return
