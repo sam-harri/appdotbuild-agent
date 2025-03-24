@@ -91,7 +91,10 @@ class Interpolator:
         
         for name, handler in application.handlers.items():
             with open(os.path.join(output_dir, "app_schema", "src", "handlers", f"{name}.ts"), "w") as f:
-                f.write(handler.handler)
+                if handler.handler:
+                    f.write(handler.handler)
+                else:
+                    f.write(f"/// handler code was not generated")
         
         for name, handler_test in application.handler_tests.items():
             with open(os.path.join(output_dir, "app_schema", "src", "tests", "handlers", f"{name}.test.ts"), "w") as f:
