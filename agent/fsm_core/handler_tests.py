@@ -418,14 +418,55 @@ Match the output format provided in the Example. Return new required imports wit
 
 
 FIX_PROMPT = """
+{% if errors %}
 Make sure to address following TypeScript compilation, linting and runtime errors:
 <errors>
 {{errors}}
 </errors>
+{% endif %}
+
+{% if additional_feedback %}
+Additional feedback:
+<feedback>
+{{additional_feedback}}
+</feedback>
+{% endif %}
 
 Verify absence of reserved keywords in property names, type names, and function names.
 Follow original formatting, return <imports> and corrected complete test suite with each test encompassed within <test> tag.
 """
+
+
+FEEDBACK_PROMPT = """
+Based on TypeScript and Drizzle schemas application definition, revise the unit test suite for {{function_name}} function.
+
+<typescript>
+{{typescript_schema}}
+</typescript>
+
+<drizzle>
+{{drizzle_schema}}
+</drizzle>
+
+Here are your previous imports:
+<imports>
+{{previous_imports}}
+</imports>
+
+Here are your previous tests:
+{% for test in previous_tests %}
+<test>
+{{test}}
+</test>
+{% endfor %}
+
+Please revise the tests based on this feedback:
+<feedback>
+{{feedback}}
+</feedback>
+
+Return revised imports within <imports> and tests encompassed with <test> tags.
+""".strip()
 
 
 HANDLER_TEST_TPL = """
@@ -512,17 +553,47 @@ class HandlerTestsMachine(AgentMachine[HandlerTestsContext]):
 
 
 class Entry(HandlerTestsMachine):
-    def __init__(self, function_name: str, typescript_schema: str, drizzle_schema: str):
+    def __init__(self, function_name: str, typescript_schema: str, drizzle_schema: str, feedback: str = None):
         self.function_name = function_name
         self.typescript_schema = typescript_schema
         self.drizzle_schema = drizzle_schema
-
+        self.feedback = feedback
     @property
     def next_message(self) -> MessageParam | None:
+        if self.feedback:
+            # If we have feedback, use the fix prompt with the feedback
+            return MessageParam(role="user", content=jinja2.Template(FIX_PROMPT).render(
+                errors="",
+                additional_feedback=self.feedback
+            ))
+        # Otherwise use the standard prompt
         content = jinja2.Template(PROMPT).render(
             function_name=self.function_name,
             typescript_schema=self.typescript_schema,
             drizzle_schema=self.drizzle_schema,
+        )
+        return MessageParam(role="user", content=content)
+
+
+class FeedbackEntry(HandlerTestsMachine):
+    """State for revising existing handler tests with feedback"""
+    def __init__(self, function_name: str, typescript_schema: str, drizzle_schema: str, previous_imports: str, previous_tests: list[str], feedback: str):
+        self.function_name = function_name
+        self.typescript_schema = typescript_schema
+        self.drizzle_schema = drizzle_schema
+        self.previous_imports = previous_imports
+        self.previous_tests = previous_tests
+        self.feedback = feedback
+    
+    @property
+    def next_message(self) -> MessageParam | None:
+        content = jinja2.Template(FEEDBACK_PROMPT).render(
+            function_name=self.function_name,
+            typescript_schema=self.typescript_schema,
+            drizzle_schema=self.drizzle_schema,
+            previous_imports=self.previous_imports,
+            previous_tests=self.previous_tests,
+            feedback=self.feedback
         )
         return MessageParam(role="user", content=content)
 

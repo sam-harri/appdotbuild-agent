@@ -443,7 +443,6 @@ describe("{{handler_name}}", () => {
         await createDB();
     });
 
-
     afterEach(async () => {
         await resetDB();
     });
@@ -518,13 +517,8 @@ class HandlerTestTaskNode(TaskNode[HandlerTestData, list[MessageParam]]):
                 "src/db/schema/application.ts": kwargs['drizzle_schema']
             }
             
-            remove_unused_vars_cmd = [
-                "sh",
-                "-c",  
-                f"npx eslint ./src/tests/handlers/{kwargs['function_name']}.test.ts --rule 'no-unused-vars: [\"error\", {{ \"args\": \"none\" }}]' --quiet -f json | npx remove-unused-vars"
-            ]
-            linting_cmd = ["npx", "eslint", "-c", "eslint.config.mjs", "--fix", f"./src/tests/handlers/{kwargs['function_name']}.test.ts"]
-            compilation_result, _, linting_result = typescript_compiler.compile_typescript(file_map, [remove_unused_vars_cmd, linting_cmd])
+            linting_cmd = ["npx", "eslint", "-c", ".eslintrc.js", f"./src/tests/handlers/{kwargs['function_name']}.test.ts"]
+            compilation_result, linting_result = typescript_compiler.compile_typescript(file_map, [linting_cmd])
             combined_feedback = {
                 "exit_code": compilation_result["exit_code"] or linting_result["exit_code"],
                 "stdout": (compilation_result["stdout"] or "") + ("\n" + linting_result["stdout"] if linting_result["stdout"] else ""),

@@ -55,9 +55,9 @@ TypeSpec RESERVED keywords:
 NOTE: Avoid using these keywords as property names, type names, and function names.
 
 Example input:
-<description>
+<user_requests>
 Bot that records my diet and calculates calories.
-</description>
+</user_requests>
 
 Output:
 <reasoning>
@@ -120,11 +120,11 @@ With full meal breakdown
 }
 </typespec>
 
-<user-requests>
+<user_requests>
 {% for request in user_requests %}
 {{request}}
 {% endfor %}
-</user-requests>
+</user_requests>
 
 Return <reasoning> and TypeSpec definition encompassed with <typespec> tag.
 """.strip()
@@ -138,6 +138,52 @@ Make sure to address following TypeSpec compilation errors:
 
 Verify absence of reserved keywords in property names, type names, and function names.
 Return <reasoning> and fixed complete TypeSpec definition encompassed with <typespec> tag.
+""".strip()
+
+
+FEEDBACK_PROMPT = """
+Given a history of a chat with user, revise the TypeSpec models and interface for the application.
+
+<user_requests>
+{% for request in user_requests %}
+{{request}}
+{% endfor %}
+</user_requests>
+
+Here is your previous TypeSpec schema:
+<previous_schema>
+{{previous_schema}}
+</previous_schema>
+
+Please revise the schema based on this feedback:
+<feedback>
+{{feedback}}
+</feedback>
+
+TypeSpec is extended with an @llm_func decorator that defines a single sentence description for the function use case.
+extern dec llm_func(target: unknown, description: string);
+
+TypeSpec is extended with an @scenario decorator that defines gherkin scenario for the function use case.
+extern dec scenario(target: unknown, gherkin: string);
+
+Rules:
+- Output contains a single interface.
+- Functions in the interface should be decorated with @llm_func decorator.
+- Each function in the interface should be decorated with at least one @scenario decorator.
+- Each function must have a complete set of scenarios defined with @scenario decorator.
+- Each function should have a single argument "options".
+- The "options" parameter must always be an object model type, never a primitive type.
+- Data model for the function argument should be simple and easily inferable from chat messages.
+- Using reserved keywords for property names, type names, and function names is not allowed.
+
+Return your revised schema with:
+<reasoning>
+Your reasoning for each change you made based on the feedback
+</reasoning>
+
+<typespec>
+// Your revised TypeSpec schema
+</typespec>
 """.strip()
 
 
@@ -173,7 +219,7 @@ class TypespecMachine(AgentMachine[TypespecContext]):
         if not functions:
             raise ValueError("Failed to parse output, expected at least one function definition")
         return reasoning, definitions, functions
-    
+
     def on_message(self: Self, context: TypespecContext, message: MessageParam) -> "TypespecMachine":
         content = llm_common.pop_first_text(message)
         if content is None:
@@ -191,7 +237,7 @@ class TypespecMachine(AgentMachine[TypespecContext]):
             "",
             typespec
         ])
-        feedback = context.compiler.compile_typespec(typespec_schema)  
+        feedback = context.compiler.compile_typespec(typespec_schema)
         if feedback["exit_code"] != 0:
             return CompileError(reasoning, typespec, llm_functions, feedback)
         return Success(reasoning, typespec, llm_functions, feedback)
@@ -199,19 +245,37 @@ class TypespecMachine(AgentMachine[TypespecContext]):
     @property
     def is_done(self) -> bool:
         return False
-    
+
     @property
     def score(self) -> float:
-        return 0.0      
+        return 0.0
 
 
 class Entry(TypespecMachine):
+    """Initial state for creating a new TypeSpec schema without feedback"""
     def __init__(self, user_requests: list[str]):
         self.user_requests = user_requests
-    
+
     @property
     def next_message(self) -> MessageParam | None:
         content = jinja2.Template(PROMPT).render(user_requests=self.user_requests)
+        return MessageParam(role="user", content=content)
+
+
+class FeedbackEntry(TypespecMachine):
+    """State for revising an existing TypeSpec schema with feedback"""
+    def __init__(self, user_requests: list[str], previous_schema: str, feedback: str):
+        self.user_requests = user_requests
+        self.previous_schema = previous_schema
+        self.feedback = feedback
+
+    @property
+    def next_message(self) -> MessageParam | None:
+        content = jinja2.Template(FEEDBACK_PROMPT).render(
+            user_requests=self.user_requests,
+            previous_schema=self.previous_schema,
+            feedback=self.feedback
+        )
         return MessageParam(role="user", content=content)
 
 
@@ -221,7 +285,7 @@ class FormattingError(TypespecMachine):
 
     @property
     def next_message(self) -> MessageParam | None:
-        content = FIX_PROMPT % {"errors": self.exception}
+        content = jinja2.Template(FIX_PROMPT).render(errors=self.exception)
         return MessageParam(role="user", content=content)
 
 
@@ -233,10 +297,21 @@ class TypespecCompile:
         self.feedback = feedback
 
 
-class CompileError(TypespecMachine, TypespecCompile):    
+class CompileError(TypespecMachine, TypespecCompile):
     @property
     def next_message(self) -> MessageParam | None:
-        content = FIX_PROMPT % {"errors": self.feedback["stdout"]}
+        content = jinja2.Template(FIX_PROMPT).render(errors=self.feedback["stderr"])
+        return MessageParam(role="user", content=content)
+
+
+class UserFeedback(TypespecMachine, TypespecCompile):
+    def __init__(self, reasoning: str, typespec: str, llm_functions: list[LLMFunction], feedback: CompileResult, additional_feedback: str):
+        super().__init__(reasoning, typespec, llm_functions, feedback)
+        self.additional_feedback = additional_feedback
+
+    @property
+    def next_message(self) -> MessageParam | None:
+        content = jinja2.Template(FIX_PROMPT).render(errors=self.feedback["stderr"], additional_feedback=self.additional_feedback)
         return MessageParam(role="user", content=content)
 
 
@@ -244,11 +319,11 @@ class Success(TypespecMachine, TypespecCompile):
     @property
     def next_message(self) -> MessageParam | None:
         return None
-    
+
     @property
     def is_done(self) -> bool:
         return True
-    
+
     @property
     def score(self) -> float:
         return 1.0

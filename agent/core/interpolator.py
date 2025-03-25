@@ -3,6 +3,9 @@ import jinja2
 from shutil import copytree, ignore_patterns
 from capabilities import all_custom_tools
 from .datatypes import *
+from logging import getLogger
+
+logger = getLogger(__name__)
 
 TOOL_TEMPLATE = """
 import * as schema from './common/schema';
@@ -88,12 +91,13 @@ class Interpolator:
 
         with open(os.path.join(output_dir, "app_schema", "src", "custom_tools.ts"), "w") as f:
             f.write(self.environment.from_string(CUSTOM_TOOL_TEMPLATE).render(handlers=custom_tools))
-        
+
         for name, handler in application.handlers.items():
             with open(os.path.join(output_dir, "app_schema", "src", "handlers", f"{name}.ts"), "w") as f:
                 if handler.handler:
                     f.write(handler.handler)
                 else:
+                    logger.error(f"Handler {name} does not have a handler function")
                     f.write(f"/// handler code was not generated")
         
         for name, handler_test in application.handler_tests.items():
