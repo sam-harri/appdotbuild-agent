@@ -99,13 +99,5 @@ def init_sentry():
             profiles_sample_rate=1.0,
             environment=os.getenv("SENTRY_ENVIRONMENT", "dev"),
         )
-        # Send a test event to verify Sentry is working
-        try:
-            logger.info("Sending test event to Sentry")
-            sentry_sdk.capture_message("Sentry initialization test")
-            sentry_sdk.capture_event({"message": "Sentry initialization test as event"})
-
-        except Exception as e:
-            logger.exception("Failed to send test event to Sentry")
     else:
         logger.warning("Sentry disabled")
