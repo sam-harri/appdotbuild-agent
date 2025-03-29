@@ -118,7 +118,8 @@ class StateMachine[T]:
     def stack_path(self) -> list[str]:
         """
         Calculate the path of states in the stack.
-        For terminal states like FAILURE, ensure they appear correctly in the path.
+        Note: This method only returns the raw path - application-specific error handling
+        should be done at the application level.
         """
         if not self.state_stack:
             return []
@@ -157,7 +158,6 @@ class StateMachine[T]:
                 try:
                     args = invoke["input_fn"](self.context)
                 except Exception:
-                    breakpoint()
                     exit()
 
                 logger.info(f"Actor {actor_name} executing with args {args}")
@@ -187,6 +187,8 @@ class StateMachine[T]:
                         action(self.context, e)
                 else:
                     raise e
+
+
     def _run_always(self, state: State[T]):
         if "always" in state:
             logger.info("Checking always transitions")

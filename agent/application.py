@@ -4,9 +4,9 @@ import uuid
 import socket
 import logging
 import concurrent.futures
-from anthropic import AnthropicBedrock
 from compiler.core import Compiler
 from langfuse import Langfuse
+from fsm_core.llm_common import AnthropicClient
 from fsm_core.helpers import agent_dfs, span_claude_bedrock
 from fsm_core import typespec, drizzle, typescript, handler_tests, handlers
 from fsm_core.common import Node, AgentState, AgentMachine
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 def solve_agent[T](
     init: AgentMachine[T],
     context: T,
-    m_claude: AnthropicBedrock,
+    m_claude: AnthropicClient,
     langfuse: Langfuse,
     langfuse_parent_trace_id: str,
     langfuse_parent_observation_id: str,
@@ -53,7 +53,7 @@ class ActorContext:
 
 
 class TypespecActor:
-    def __init__(self, m_claude: AnthropicBedrock, compiler: Compiler, langfuse_client: Langfuse, trace_id: str, observation_id: str):
+    def __init__(self, m_claude: AnthropicClient, compiler: Compiler, langfuse_client: Langfuse, trace_id: str, observation_id: str):
         self.m_claude = m_claude
         self.compiler = compiler
         self.langfuse_client = langfuse_client
@@ -115,7 +115,7 @@ class TypespecActor:
 
 
 class DrizzleActor:
-    def __init__(self, m_claude: AnthropicBedrock, compiler: Compiler, langfuse_client: Langfuse, trace_id: str, observation_id: str):
+    def __init__(self, m_claude: AnthropicClient, compiler: Compiler, langfuse_client: Langfuse, trace_id: str, observation_id: str):
         self.m_claude = m_claude
         self.compiler = compiler
         self.langfuse_client = langfuse_client
@@ -177,7 +177,7 @@ class DrizzleActor:
 
 
 class TypescriptActor:
-    def __init__(self, m_claude: AnthropicBedrock, compiler: Compiler, langfuse_client: Langfuse, trace_id: str, observation_id: str):
+    def __init__(self, m_claude: AnthropicClient, compiler: Compiler, langfuse_client: Langfuse, trace_id: str, observation_id: str):
         self.m_claude = m_claude
         self.compiler = compiler
         self.langfuse_client = langfuse_client
@@ -210,7 +210,7 @@ class TypescriptActor:
 
 
 class HandlerTestsActor:
-    def __init__(self, m_claude: AnthropicBedrock, compiler: Compiler, langfuse_client: Langfuse, trace_id: str, observation_id: str, max_workers=5):
+    def __init__(self, m_claude: AnthropicClient, compiler: Compiler, langfuse_client: Langfuse, trace_id: str, observation_id: str, max_workers=5):
         self.m_claude = m_claude
         self.compiler = compiler
         self.langfuse_client = langfuse_client
@@ -259,7 +259,7 @@ class HandlerTestsActor:
 
 
 class HandlersActor:
-    def __init__(self, m_claude: AnthropicBedrock, compiler: Compiler, langfuse_client: Langfuse, trace_id: str, observation_id: str):
+    def __init__(self, m_claude: AnthropicClient, compiler: Compiler, langfuse_client: Langfuse, trace_id: str, observation_id: str):
         self.m_claude = m_claude
         self.compiler = compiler
         self.langfuse_client = langfuse_client
@@ -416,7 +416,7 @@ class FSMContext(TypedDict):
 class Application:
     def __init__(
         self,
-        client: AnthropicBedrock,
+        client: AnthropicClient,
         compiler: Compiler,
         langfuse_client: Langfuse | None = None,
         interaction_mode: InteractionMode = InteractionMode.NON_INTERACTIVE
@@ -425,6 +425,22 @@ class Application:
         self.compiler = compiler
         self.langfuse_client = langfuse_client or Langfuse()
         self.interaction_mode = interaction_mode
+
+    def get_effective_state(self, fsm: statemachine.StateMachine[FSMContext]) -> FsmState:
+        """
+        Gets the effective state of the FSM, taking errors into account.
+        This method encapsulates the logic for determining the actual state
+        when errors are present in the context.
+        """
+        # Check if there's an error in the context
+        if "error" in fsm.context:
+            return FsmState.FAILURE
+            
+        # If no error, return the actual state path
+        if not fsm.stack_path:
+            return FsmState.FAILURE  # Default to failure if stack is empty
+            
+        return fsm.stack_path[-1]
 
     def prepare_bot(self, prompts: list[str], bot_id: str | None = None, capabilities: list[str] | None = None, *args, **kwargs) -> ApplicationPrepareOut:
         logger.info(f"Preparing bot with prompts: {prompts}")
@@ -441,12 +457,15 @@ class Application:
         fsm = statemachine.StateMachine[FSMContext](fsm_states, fsm_context)
         logger.info("Initialized state machine, sending PROMPT event")
         fsm.send(FsmEvent.PROMPT)
-        logger.info(f"State machine finished at state: {fsm.stack_path[-1]}")
+        
+        # Get effective state that takes errors into account
+        effective_state = self.get_effective_state(fsm)
+        logger.info(f"State machine finished at state: {effective_state}")
 
         result = {"capabilities": capabilities, "status": "processing"}
         error_output = None
 
-        match fsm.stack_path[-1]:
+        match effective_state:
             case FsmState.COMPLETE:
                 typespec_schema = fsm.context["typespec_schema"]
                 result.update({"typespec": typespec_schema})
@@ -460,7 +479,7 @@ class Application:
                 result.update({"typespec": typespec_schema})
                 result.update({"status": "success"}) # until we have router we let user iterate in done state
             case _:
-                raise ValueError(F"Unexpected state: {fsm.stack_path}")
+                raise ValueError(F"Unexpected state: {effective_state}")
 
         trace.update(output=result)
 
@@ -512,21 +531,37 @@ class Application:
         fsm = statemachine.StateMachine[FSMContext](fsm_states, fsm_context)
         logger.info("Initialized state machine, sending CONFIRM event")
         fsm.send(FsmEvent.CONFIRM)
-        logger.info(f"State machine finished at state: {fsm.stack_path[-1]}")
+        
+        # Get effective state that takes errors into account
+        effective_state = self.get_effective_state(fsm)
+        logger.info(f"State machine finished at state: {effective_state}")
 
         result = {"capabilities": capabilities}
         error_output = None
 
-        match fsm.stack_path[-1]:
+        match effective_state:
             case FsmState.COMPLETE:
                 result.update(fsm.context)
             case FsmState.FAILURE:
                 error_output = fsm.context["error"]
                 result.update({"error": error_output})
             case _:
-                raise ValueError(F"Unexpected state: {fsm.stack_path}")
+                raise ValueError(F"Unexpected state: {effective_state}")
 
         trace.update(output=result)
+        # Create TypescriptOut conditionally
+        typescript_result = result.get("typescript_schema")
+        typescript_out = None
+        typescript_args = {}
+        if typescript_result:
+            typescript_out = TypescriptOut(
+                reasoning=getattr(typescript_result, "reasoning", None),
+                typescript_schema=getattr(typescript_result, "typescript_schema", None),
+                functions=getattr(typescript_result, "functions", None),
+                error_output=error_output
+            )
+            typescript_args = {f.name: f.argument_schema for f in typescript_result.functions}
+        # FixMe: should we fail otherwise?
 
         # Create dictionary comprehensions for handlers and tests
         handler_tests_dict = {
@@ -541,21 +576,10 @@ class Application:
             name: HandlerOut(
                 name=name,
                 handler=getattr(handler, "source", None),
-                argument_schema=None,
+                argument_schema=typescript_args.get(name),
                 error_output=error_output
             ) for name, handler in result.get("handlers", {}).items()
         }
-
-        # Create TypescriptOut conditionally
-        typescript_result = result.get("typescript_schema")
-        typescript_out = None
-        if typescript_result:
-            typescript_out = TypescriptOut(
-                reasoning=getattr(typescript_result, "reasoning", None),
-                typescript_schema=getattr(typescript_result, "typescript_schema", None),
-                functions=getattr(typescript_result, "functions", None),
-                error_output=error_output
-            )
 
         return ApplicationOut(
             refined_description=RefineOut(refined_description="", error_output=error_output),
