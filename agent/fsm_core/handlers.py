@@ -499,7 +499,7 @@ class HandlersMachine(AgentMachine[HandlersContext]):
             return Success(self.function_name, self.typescript_schema, self.drizzle_schema, source, feedback)
         else:
             test_path = f"src/tests/handlers/{self.function_name}.test.ts"
-            [feedback, test_feedback] = context.compiler.compile_typescript(
+            [feedback, test_feedback] = await context.compiler.compile_typescript(
                 {**bundle, test_path: self.test_suite},
                 cmds=[["bun", "test", test_path]]
             )

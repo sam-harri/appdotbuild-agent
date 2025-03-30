@@ -527,7 +527,6 @@ class HandlerTestsMachine(AgentMachine[HandlerTestsContext]):
             imports=imports,
             tests=tests,
         )
-        print(f"TEST {self.function_name} ({test_file_path}):\n\n", source, "\n")
         linting_cmd = ["bun", "run", "eslint", "-c", "eslint.config.mjs", "--fix", test_file_path]
         [ts_feedback, linter_feedback] = await context.compiler.compile_typescript({
                 test_file_path: source,
