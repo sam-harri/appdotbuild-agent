@@ -2,6 +2,7 @@ import tempfile
 import uuid
 import random
 import os
+import anyio
 import logging
 import string
 import subprocess
@@ -14,7 +15,7 @@ from fire import Fire
 from langfuse.decorators import langfuse_context
 
 from application import Application
-from compiler.core import Compiler
+from dag_compiler import Compiler
 from core.interpolator import Interpolator
 from fsm_core.llm_common import get_sync_client, CacheMode
 from common import get_logger
@@ -30,17 +31,17 @@ def generate_random_name(prefix, length=8):
     )
 
 
-def test_end2end(initial_description: str = DEFAULT_PROMPT, mode: CacheMode = "replay"):
+async def test_end2end(initial_description: str = DEFAULT_PROMPT, mode: CacheMode = "replay"):
     """Full bot creation and update workflow"""
     # Use the correct Docker image names from prepare_containers.sh
-    compiler = Compiler("botbuild/tsp_compiler", "botbuild/app_schema")
+    compiler = Compiler()
     client = get_sync_client(cache_mode=mode)
     application = Application(client, compiler)
     langfuse_context.configure(enabled=False)
 
     bot_id = str(uuid.uuid4().hex)
-    prepared_bot = application.prepare_bot([initial_description], bot_id=bot_id)
-    my_bot = application.update_bot(
+    prepared_bot = await application.prepare_bot([initial_description], bot_id=bot_id)
+    my_bot = await application.update_bot(
         typespec_schema=prepared_bot.typespec.typespec_definitions or "",
         bot_id=bot_id,
         capabilities=prepared_bot.capabilities.capabilities or [],
@@ -136,10 +137,11 @@ def test_end2end(initial_description: str = DEFAULT_PROMPT, mode: CacheMode = "r
                 logger.exception(f"Error downing docker compose: {e}")
                 raise e
             os.chdir(dir_to_return)
+
 def update_cache(
     prompt: str = DEFAULT_PROMPT,
 ):
-    test_end2end(prompt, mode="record")
+    anyio.run(test_end2end, prompt, "record")
 
 
 if __name__ == "__main__":

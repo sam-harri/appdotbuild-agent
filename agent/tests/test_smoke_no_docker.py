@@ -3,7 +3,7 @@ import os
 from unittest.mock import MagicMock, patch
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from compiler.core import Compiler
+from dag_compiler import Compiler
 from application import Application
 from anthropic import AnthropicBedrock
 
@@ -14,7 +14,7 @@ def test_application_no_docker():
     """
     from fsm_core.common import AgentState
     from fsm_core import typespec, drizzle, typescript, handler_tests, handlers
-    from compiler.core import CompileResult
+    from dag_compiler import CompileResult
     
     # Create actual instance objects from FSM core module for proper mocking
     def create_success_node(success_class, **kwargs):
