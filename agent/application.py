@@ -4,13 +4,12 @@ import uuid
 import socket
 import anyio
 import logging
-from anthropic import AnthropicBedrock
 from dag_compiler import Compiler
 from langfuse import Langfuse
 from fsm_core.llm_common import AnthropicClient
 from fsm_core.helpers import agent_dfs, span_claude_bedrock
 from fsm_core import typespec, drizzle, typescript, handler_tests, handlers
-from fsm_core.common import Node, AgentState, AgentMachine
+from fsm_core.common import AgentMachine
 import statemachine
 from core.datatypes import ApplicationPrepareOut, CapabilitiesOut, DrizzleOut, TypespecOut, ApplicationOut
 from core.datatypes import RefineOut, GherkinOut, TypescriptOut, HandlerTestsOut, HandlerOut
@@ -438,7 +437,6 @@ class Application:
             
         return fsm.stack_path[-1]
 
-    def prepare_bot(self, prompts: list[str], bot_id: str | None = None, capabilities: list[str] | None = None, *args, **kwargs) -> ApplicationPrepareOut:
     async def prepare_bot(self, prompts: list[str], bot_id: str | None = None, capabilities: list[str] | None = None, *args, **kwargs) -> ApplicationPrepareOut:
         logger.info(f"Preparing bot with prompts: {prompts}")
         trace = self.langfuse_client.trace(
@@ -454,7 +452,10 @@ class Application:
         fsm = statemachine.StateMachine[FSMContext](fsm_states, fsm_context)
         logger.info("Initialized state machine, sending PROMPT event")
         await fsm.send(FsmEvent.PROMPT)
-        logger.info(f"State machine finished at state: {fsm.stack_path[-1]}")
+        
+        # Get effective state that takes errors into account
+        effective_state = self.get_effective_state(fsm)
+        logger.info(f"State machine finished at state: {effective_state}")
 
         result = {"capabilities": capabilities, "status": "processing"}
         error_output = None
@@ -525,7 +526,10 @@ class Application:
         fsm = statemachine.StateMachine[FSMContext](fsm_states, fsm_context)
         logger.info("Initialized state machine, sending CONFIRM event")
         await fsm.send(FsmEvent.CONFIRM)
-        logger.info(f"State machine finished at state: {fsm.stack_path[-1]}")
+        
+        # Get effective state that takes errors into account
+        effective_state = self.get_effective_state(fsm)
+        logger.info(f"State machine finished at state: {effective_state}")
 
         result = {"capabilities": capabilities}
         error_output = None
@@ -653,12 +657,10 @@ class Application:
                         "on_done": {
                             "target": typespec_target,
                             "actions": [fsm_ctx_set("typespec_schema")],
-                            #"actions": [lambda ctx, event: ctx.update({"typespec_schema": event})],
                         },
                         "on_error": {
                             "target": FsmState.FAILURE,
                             "actions": [fsm_ctx_set("error")],
-                            #"actions": [lambda ctx, event: ctx.update({"error": event})],
                         },
                     },
                 },
@@ -673,12 +675,10 @@ class Application:
                         "on_done": {
                             "target": drizzle_target,
                             "actions": [fsm_ctx_set("drizzle_schema")],
-                            #"actions": [lambda ctx, event: ctx.update({"drizzle_schema": event})],
                         },
                         "on_error": {
                             "target": FsmState.FAILURE,
                             "actions": [fsm_ctx_set("error")],
-                            #"actions": [lambda ctx, event: ctx.update({"error": event})],
                         },
                     }
                 },
@@ -689,12 +689,10 @@ class Application:
                         "on_done": {
                             "target": typescript_target,
                             "actions": [fsm_ctx_set("typescript_schema")],
-                            #"actions": [lambda ctx, event: ctx.update({"typescript_schema": event})],
                         },
                         "on_error": {
                             "target": FsmState.FAILURE,
                             "actions": [fsm_ctx_set("error")],
-                            #"actions": [lambda ctx, event: ctx.update({"error": event})],
                         },
                     }
                 },
@@ -705,12 +703,10 @@ class Application:
                         "on_done": {
                             "target": handler_tests_target,
                             "actions": [fsm_ctx_set("handler_tests")],
-                            #"actions": [lambda ctx, event: ctx.update({"handler_tests": event})],
                         },
                         "on_error": {
                             "target": FsmState.FAILURE,
                             "actions": [fsm_ctx_set("error")],
-                            #"actions": [lambda ctx, event: ctx.update({"error": event})],
                         },
                     }
                 },
@@ -721,12 +717,10 @@ class Application:
                         "on_done": {
                             "target": handlers_target,
                             "actions": [fsm_ctx_set("handlers")],
-                            #"actions": [lambda ctx, event: ctx.update({"handlers": event})],
                         },
                         "on_error": {
                             "target": FsmState.FAILURE,
                             "actions": [fsm_ctx_set("error")],
-                            #"actions": [lambda ctx, event: ctx.update({"error": event})],
                         },
                     }
                 },
