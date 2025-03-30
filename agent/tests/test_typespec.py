@@ -1,6 +1,6 @@
 import pytest
-from unittest.mock import patch, MagicMock
-from policies.typespec import TypespecTaskNode, LLMFunction, PolicyException
+import re
+from fsm_core.typespec import TypespecMachine
 
 class TestTypespecParser:
     def test_parse_complete_output(self):
@@ -47,7 +47,7 @@ class TestTypespecParser:
         </typespec>
         """
         
-        reasoning, definitions, functions = TypespecTaskNode.parse_output(test_output)
+        reasoning, definitions, functions = TypespecMachine.parse_output(test_output)
         
         # Normalize whitespace for comparison
         normalized_reasoning = "\n".join(line.strip() for line in reasoning.splitlines())
@@ -80,8 +80,8 @@ class TestTypespecParser:
         </typespec>
         """
         
-        with pytest.raises(PolicyException) as excinfo:
-            TypespecTaskNode.parse_output(test_output_no_reasoning)
+        with pytest.raises(ValueError) as excinfo:
+            TypespecMachine.parse_output(test_output_no_reasoning)
         assert "Failed to parse output" in str(excinfo.value)
         
         # Missing typespec tag
@@ -91,8 +91,8 @@ class TestTypespecParser:
         </reasoning>
         """
         
-        with pytest.raises(PolicyException) as excinfo:
-            TypespecTaskNode.parse_output(test_output_no_typespec)
+        with pytest.raises(ValueError) as excinfo:
+            TypespecMachine.parse_output(test_output_no_typespec)
         assert "Failed to parse output" in str(excinfo.value)
 
 
@@ -124,7 +124,7 @@ class TestTypespecParser:
         </typespec>
         """
         
-        reasoning, definitions, functions = TypespecTaskNode.parse_output(test_output)
+        reasoning, definitions, functions = TypespecMachine.parse_output(test_output)
         
         assert reasoning == "Test reasoning"
         assert len(functions) == 1
@@ -152,7 +152,7 @@ class TestTypespecParser:
         </typespec>
         """
         
-        reasoning, definitions, functions = TypespecTaskNode.parse_output(test_output)
+        reasoning, definitions, functions = TypespecMachine.parse_output(test_output)
         
         assert reasoning == "Edge case testing"
         assert len(functions) == 1
@@ -184,7 +184,7 @@ class TestTypespecParser:
         </typespec>
         """
         
-        reasoning, definitions, functions = TypespecTaskNode.parse_output(test_output)
+        reasoning, definitions, functions = TypespecMachine.parse_output(test_output)
         
         assert len(functions) == 3
         assert functions[0].name == "_underscoreFunc"
@@ -240,7 +240,7 @@ class TestTypespecParser:
         </typespec>
         """
         
-        reasoning, definitions, functions = TypespecTaskNode.parse_output(test_output)
+        reasoning, definitions, functions = TypespecMachine.parse_output(test_output)
         
         assert reasoning == "Testing complex models"
         assert len(functions) == 2
@@ -287,7 +287,7 @@ class TestTypespecParser:
         </typespec>
         """
         
-        reasoning, definitions, functions = TypespecTaskNode.parse_output(test_output)
+        reasoning, definitions, functions = TypespecMachine.parse_output(test_output)
         
         assert reasoning == "Testing TypeScript style"
         assert len(functions) == 1
@@ -333,7 +333,7 @@ class TestTypespecParser:
         </typespec>
         """
         
-        reasoning, definitions, functions = TypespecTaskNode.parse_output(test_output)
+        reasoning, definitions, functions = TypespecMachine.parse_output(test_output)
         
         assert reasoning == "Testing multiple interfaces"
         assert len(functions) == 2
@@ -385,7 +385,7 @@ class TestTypespecParser:
         </typespec>
         """
         
-        reasoning, definitions, functions = TypespecTaskNode.parse_output(test_output)
+        reasoning, definitions, functions = TypespecMachine.parse_output(test_output)
         
         assert reasoning == "Testing special types"
         assert len(functions) == 1
@@ -448,7 +448,7 @@ class TestTypespecParser:
         </typespec>
         """
         
-        reasoning, definitions, functions = TypespecTaskNode.parse_output(test_output)
+        reasoning, definitions, functions = TypespecMachine.parse_output(test_output)
         
         assert reasoning == "Testing return types"
         assert len(functions) == 3
@@ -501,7 +501,7 @@ class TestTypespecParser:
         </typespec>
         """
         
-        reasoning, definitions, functions = TypespecTaskNode.parse_output(test_output)
+        reasoning, definitions, functions = TypespecMachine.parse_output(test_output)
         
         assert reasoning == "Testing complex parameters"
         assert len(functions) == 1
@@ -512,6 +512,7 @@ class TestTypespecParser:
         assert "BaseFilter" in definitions
         assert "& BaseFilter" in definitions  # Intersection type
         assert '"asc" | "desc"' in definitions  # Union type
+        
     def test_void_return_type_validation(self):
         """Test that functions with void return types are flagged as errors."""
         
@@ -542,7 +543,7 @@ class TestTypespecParser:
         </typespec>
         """
         
-        reasoning, definitions, functions = TypespecTaskNode.parse_output(test_output)
+        reasoning, definitions, functions = TypespecMachine.parse_output(test_output)
         
         assert reasoning == "Testing void return validation"
         assert len(functions) == 2

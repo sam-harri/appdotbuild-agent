@@ -1,6 +1,6 @@
 from typing import Awaitable, Callable
-from anthropic import AnthropicBedrock
 from anthropic.types import MessageParam
+from fsm_core.llm_common import AnthropicClient
 
 from langfuse import Langfuse
 from langfuse.client import StatefulGenerationClient
@@ -11,9 +11,8 @@ from .common import AgentState, Node
 
 
 def bedrock_claude(
-    client: AnthropicBedrock,
+    client: AnthropicClient,
     messages: list[MessageParam],
-    model: str = "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
     max_tokens: int = 8192,
     temperature: float = 1.0,
     thinking_budget: int = 0,
@@ -29,7 +28,6 @@ def bedrock_claude(
         }
     return client.messages.create(
         max_tokens=max_tokens + thinking_budget,
-        model=model,
         messages=messages,
         temperature=temperature,
         thinking=thinking_config,
@@ -37,10 +35,9 @@ def bedrock_claude(
 
 
 def span_claude_bedrock(
-    client: AnthropicBedrock,
+    client: AnthropicClient,
     messages: list[MessageParam],
     generation: StatefulGenerationClient,
-    model: str = "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
     max_tokens: int = 8192,
     temperature: float = 1.0,
     thinking_budget: int = 0,
@@ -48,7 +45,7 @@ def span_claude_bedrock(
     generation.update(
         name="Anthropic-generation",
         input=messages,
-        model=model,
+        model=client.model_name,
         model_parameters={
             "maxTokens": max_tokens,
             "temperature": temperature,
@@ -58,7 +55,6 @@ def span_claude_bedrock(
     completion = bedrock_claude(
         client,
         messages,
-        model=model,
         max_tokens=max_tokens,
         temperature=temperature,
         thinking_budget=thinking_budget,
@@ -127,7 +123,7 @@ def solve_agent[T](
     init: common.AgentMachine[T],
     context: T,
     trace_name: str,
-    m_claude: AnthropicBedrock,
+    m_claude: AnthropicClient,
     langfuse: Langfuse,
     max_depth: int = 3,
     max_width: int = 2,
