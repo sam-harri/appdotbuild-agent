@@ -1,5 +1,6 @@
 import sys
 import os
+import pytest
 from unittest.mock import MagicMock, patch
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -7,7 +8,11 @@ from dag_compiler import Compiler
 from application import Application
 from anthropic import AnthropicBedrock
 
-def test_application_no_docker():
+
+pytestmark = pytest.mark.anyio
+
+
+async def test_application_no_docker():
     """
     Test Application by mocking the solve_agent function to avoid any LLM invocations.
     Verify the structure and types of the outputs.
@@ -221,14 +226,14 @@ def test_application_no_docker():
         with patch('langfuse.Langfuse', return_value=mock_langfuse):
             with patch('statemachine.StateMachine', MockStateMachine):
                 # Set up test
-                compiler = Compiler("botbuild/tsp_compiler", "botbuild/app_schema")
+                compiler = Compiler()
                 client = MagicMock(spec=AnthropicBedrock)
                 
                 # Create application and run test
                 application = Application(client, compiler)
                 
                 # Test prepare_bot with known trace IDs for predictable output
-                prepared_bot = application.prepare_bot(
+                prepared_bot = await application.prepare_bot(
                     ["Create a test bot"], 
                     langfuse_observation_id="mock-trace-id"
                 )
@@ -267,7 +272,7 @@ def test_application_no_docker():
                 }
                 </typespec>
                 """
-                my_bot = application.update_bot(
+                my_bot = await application.update_bot(
                     test_typespec,
                     langfuse_observation_id="mock-trace-id"
                 )
