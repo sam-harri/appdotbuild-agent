@@ -1,4 +1,4 @@
-from typing import Callable, Protocol, Self
+from typing import Awaitable, Callable, Protocol, Self
 import uuid
 import concurrent.futures
 from anthropic.types import MessageParam
@@ -50,7 +50,7 @@ class Scorable(Protocol):
 def best_solution[T: Scorable](root: Node[T]) -> Node[T] | None:
     return max(root.get_all_children(), key=lambda node: node.data.score, default=None)
 
-
+# TODO: Switch to async
 def bfs[T: Scorable](
     root: Node[T],
     expand_fn: Callable[[Node[T]], Node[T]],
@@ -76,9 +76,9 @@ def bfs[T: Scorable](
     return best_solution(root)
 
 
-def dfs[T: Scorable](
+async def dfs[T: Scorable](
     root: Node[T],
-    expand_fn: Callable[[Node[T]], Node[T]],
+    expand_fn: Callable[[Node[T]], Awaitable[Node[T]]],
     max_depth: int = 5,
     max_width: int = 2,
     max_budget: int | None = None,
@@ -90,14 +90,14 @@ def dfs[T: Scorable](
         if cur_node.depth >= max_depth or len(cur_node.children) >= max_width:
             stack.pop()
             continue
-        new_node = expand_fn(cur_node)
+        new_node = await expand_fn(cur_node)
         cur_node.children.append(new_node)
         stack.append(new_node)
         cur_budget = cur_budget + 1
     return best_solution(root)
 
 
-def dfs_rewind[T: Scorable](
+async def dfs_rewind[T: Scorable](
     root: Node[T],
     expand_fn: Callable[[Node[T]], Node[T]],
     max_depth: int = 5,
@@ -114,7 +114,7 @@ def dfs_rewind[T: Scorable](
         stack.append(head_node) # shuffle back to uniformly explore
         cur_node = head_node
         while cur_node.depth < max_depth and len(cur_node.children) < max_width and not cur_node.data.is_done:
-            new_node = expand_fn(cur_node)
+            new_node = await expand_fn(cur_node)
             cur_node.children.append(new_node)
             cur_node, cur_budget = new_node, cur_budget + 1
     return best_solution(root)
@@ -127,7 +127,7 @@ class AgentMachine[T](Scorable):
     @property
     def next_message(self) -> MessageParam | None: ...
 
-    def on_message(self, context: T, message: MessageParam) -> "AgentMachine[T]": ...
+    async def on_message(self, context: T, message: MessageParam) -> "AgentMachine[T]": ...
 
 
 class AgentState[T](AgentMachine[T]):
@@ -150,8 +150,8 @@ class AgentState[T](AgentMachine[T]):
     def next_message(self) -> MessageParam | None:
         return self.inner.next_message
     
-    def on_message(self, context: T, message: MessageParam) -> "AgentState[T]":
-        return type(self)(self.inner.on_message(context, message), message)
+    async def on_message(self, context: T, message: MessageParam) -> "AgentState[T]":
+        return type(self)(await self.inner.on_message(context, message), message)
     
     @property
     def thread(self) -> list[MessageParam]:

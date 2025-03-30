@@ -2,7 +2,7 @@ from typing import Protocol, Self
 import re
 import jinja2
 from anthropic.types import MessageParam
-from compiler.core import Compiler, CompileResult
+from dag_compiler import Compiler, CompileResult
 from . import llm_common
 from .common import AgentMachine
 
@@ -479,7 +479,7 @@ class HandlersMachine(AgentMachine[HandlersContext]):
         handler = matches[-1].strip()
         return handler
 
-    def on_message(self: Self, context: HandlersContext, message: MessageParam) -> "HandlersMachine":
+    async def on_message(self: Self, context: HandlersContext, message: MessageParam) -> "HandlersMachine":
         content = llm_common.pop_first_text(message)
         if content is None:
             raise RuntimeError(f"Failed to extract text from message: {message}")
@@ -493,7 +493,7 @@ class HandlersMachine(AgentMachine[HandlersContext]):
             "src/db/schema/application.ts": self.drizzle_schema,
         }
         if self.test_suite is None:
-            feedback = context.compiler.compile_typescript(bundle)
+            feedback = await context.compiler.compile_typescript(bundle)
             if feedback["exit_code"] != 0:
                 return TypecheckError(self.function_name, self.typescript_schema, self.drizzle_schema, source, feedback)
             return Success(self.function_name, self.typescript_schema, self.drizzle_schema, source, feedback)

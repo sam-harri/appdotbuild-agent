@@ -2,10 +2,10 @@ import os
 import enum
 import uuid
 import socket
+import anyio
 import logging
-import concurrent.futures
 from anthropic import AnthropicBedrock
-from compiler.core import Compiler
+from dag_compiler import Compiler
 from langfuse import Langfuse
 from fsm_core.helpers import agent_dfs, span_claude_bedrock
 from fsm_core import typespec, drizzle, typescript, handler_tests, handlers
@@ -18,7 +18,7 @@ from typing import TypedDict, NotRequired
 logger = logging.getLogger(__name__)
 
 
-def solve_agent[T](
+async def solve_agent[T](
     init: AgentMachine[T],
     context: T,
     m_claude: AnthropicBedrock,
@@ -32,7 +32,7 @@ def solve_agent[T](
         completion = span_claude_bedrock(m_claude, messages, generation)
         return {"role": "assistant", "content": completion.content}
 
-    solution = agent_dfs(
+    solution = await agent_dfs(
         init,
         context,
         llm_fn,
@@ -60,7 +60,7 @@ class TypespecActor:
         self.trace_id = trace_id
         self.observation_id = observation_id
 
-    def execute(self, user_requests: list[str], feedback: str | None = None, previous_schema: str | None = None):
+    async def execute(self, user_requests: list[str], feedback: str | None = None, previous_schema: str | None = None):
         """
         Execute TypeSpec generation or revision
 
@@ -80,7 +80,7 @@ class TypespecActor:
         # Create appropriate entry based on operation type
         start = self._create_entry(user_requests, feedback, previous_schema)
 
-        result, _ = solve_agent(start, ActorContext(self.compiler), self.m_claude, self.langfuse_client, self.trace_id, span.id)
+        result, _ = await solve_agent(start, ActorContext(self.compiler), self.m_claude, self.langfuse_client, self.trace_id, span.id)
         if result is None:
             raise ValueError("Failed to solve typespec")
         if not isinstance(result.data.inner, typespec.Success):
@@ -122,7 +122,7 @@ class DrizzleActor:
         self.trace_id = trace_id
         self.observation_id = observation_id
 
-    def execute(self, typespec_definitions: str, feedback: str = None, previous_schema: str = None):
+    async def execute(self, typespec_definitions: str, feedback: str = None, previous_schema: str = None):
         """
         Execute Drizzle schema generation or revision
 
@@ -142,7 +142,7 @@ class DrizzleActor:
         # Create appropriate entry based on operation type
         start = self._create_entry(typespec_definitions, feedback, previous_schema)
 
-        result, _ = solve_agent(start, ActorContext(self.compiler), self.m_claude, self.langfuse_client, self.trace_id, span.id)
+        result, _ = await solve_agent(start, ActorContext(self.compiler), self.m_claude, self.langfuse_client, self.trace_id, span.id)
         if result is None:
             raise ValueError("Failed to solve drizzle")
         if not isinstance(result.data.inner, drizzle.Success):
@@ -184,7 +184,7 @@ class TypescriptActor:
         self.trace_id = trace_id
         self.observation_id = observation_id
 
-    def execute(self, typespec_definitions: str, feedback: str = None):
+    async def execute(self, typespec_definitions: str, feedback: str = None):
         span_name = "typescript_revision" if feedback else "typescript"
         span = self.langfuse_client.span(
             name=span_name,
@@ -194,7 +194,7 @@ class TypescriptActor:
 
         # Create entry with feedback if available
         start = typescript.Entry(typespec_definitions, feedback)
-        result, _ = solve_agent(start, ActorContext(self.compiler), self.m_claude, self.langfuse_client, self.trace_id, span.id)
+        result, _ = await solve_agent(start, ActorContext(self.compiler), self.m_claude, self.langfuse_client, self.trace_id, span.id)
         if result is None:
             raise ValueError("Failed to solve typescript")
         if not isinstance(result.data.inner, typescript.Success):
@@ -218,7 +218,7 @@ class HandlerTestsActor:
         self.observation_id = observation_id
         self.max_workers = max_workers
 
-    def execute(self, functions: list[typescript.FunctionDeclaration], typescript_schema: str, drizzle_schema: str, feedback: dict[str, str] = None) -> dict[str, handler_tests.Success]:
+    async def execute(self, functions: list[typescript.FunctionDeclaration], typescript_schema: str, drizzle_schema: str, feedback: dict[str, str] = None) -> dict[str, handler_tests.Success]:
         has_feedback = feedback is not None and len(feedback) > 0
         span_name = "handler_tests_revision" if has_feedback else "handler_tests"
         span = self.langfuse_client.span(
@@ -227,27 +227,24 @@ class HandlerTestsActor:
             parent_observation_id=self.observation_id,
         )
 
-        future_to_tests: dict[concurrent.futures.Future[tuple[Node[AgentState] | None, Node[AgentState]]], str] = {}
-        result_dict = {}
+        result_dict: dict[str, handler_tests.Success] = {}
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            for function in functions:
-                # Get function-specific feedback if available
-                function_feedback = feedback.get(function.name) if feedback else None
+        async def run_test(function: typescript.FunctionDeclaration):
+            # Use feedback for the function if available
+            function_feedback = feedback.get(function.name) if feedback else None
 
-                # Create entry with feedback if available
-                start = handler_tests.Entry(function.name, typescript_schema, drizzle_schema, function_feedback)
-                future_to_tests[executor.submit(solve_agent, start, ActorContext(self.compiler), self.m_claude, self.langfuse_client, self.trace_id, span.id)] = function.name
+            # Create entry with feedback if available
+            start = handler_tests.Entry(function.name, typescript_schema, drizzle_schema, function_feedback)
+            result, _ = await solve_agent(start, ActorContext(self.compiler), self.m_claude, self.langfuse_client, self.trace_id, span.id)
+            if result is None:
+                raise ValueError(f"Failed to solve handler tests for {function}")
+            if not isinstance(result.data.inner, handler_tests.Success):
+                raise Exception(f"Failed to solve handler tests for {function}: " + str(result.data.inner))
+            result_dict[function.name] = result.data.inner
 
-            for future in concurrent.futures.as_completed(future_to_tests):
-                function = future_to_tests[future]
-                result, _ = future.result()
-                # can skip if failure and generate what succeeded
-                if result is None:
-                    raise ValueError(f"Failed to solve handler tests for {function}")
-                if not isinstance(result.data.inner, handler_tests.Success):
-                    raise Exception(f"Failed to solve handler tests for {function}: " + str(result.data.inner))
-                result_dict[function] = result.data.inner
+        async with anyio.create_task_group() as tg:
+            for fn in functions:
+                tg.start_soon(run_test, fn)
 
         # Include feedback in the span data if provided
         output_data = {k: v.__dict__ for k, v in result_dict.items()}
@@ -266,7 +263,7 @@ class HandlersActor:
         self.trace_id = trace_id
         self.observation_id = observation_id
 
-    def execute(self, functions: list[typescript.FunctionDeclaration], typescript_schema: str, drizzle_schema: str, tests: dict[str, handler_tests.Success], feedback: dict[str, str] = None) -> dict[str, handlers.Success | handlers.TestsError]:
+    async def execute(self, functions: list[typescript.FunctionDeclaration], typescript_schema: str, drizzle_schema: str, tests: dict[str, handler_tests.Success], feedback: dict[str, str] = None) -> dict[str, handlers.Success | handlers.TestsError]:
         has_feedback = feedback is not None and len(feedback) > 0
         span_name = "handlers_revision" if has_feedback else "handlers"
         span = self.langfuse_client.span(
@@ -275,26 +272,24 @@ class HandlersActor:
             parent_observation_id=self.observation_id,
         )
 
-        futures_to_handlers: dict[concurrent.futures.Future[tuple[Node[AgentState] | None, Node[AgentState]]], str] = {}
         result_dict = {}
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-            for function in functions:
-                # Get function-specific feedback if available
-                function_feedback = feedback.get(function.name) if feedback else None
+        async def run_handler(function: typescript.FunctionDeclaration):
+            # Get function-specific feedback if available
+            function_feedback = feedback.get(function.name) if feedback else None
 
-                # Create entry with feedback if available
-                start = handlers.Entry(function.name, typescript_schema, drizzle_schema, tests[function.name].source, function_feedback)
-                futures_to_handlers[executor.submit(solve_agent, start, ActorContext(self.compiler), self.m_claude, self.langfuse_client, self.trace_id, span.id)] = function.name
+            # Create entry with feedback if available
+            start = handlers.Entry(function.name, typescript_schema, drizzle_schema, tests[function.name].source, function_feedback)
+            result, _ = await solve_agent(start, ActorContext(self.compiler), self.m_claude, self.langfuse_client, self.trace_id, span.id)
+            if result is None:
+                raise ValueError(f"Failed to solve handlers for {function}")
+            if isinstance(result.data.inner, handlers.TestsError) and result.data.inner.score == 0:
+                raise Exception(f"Failed to solve handlers for {function}: " + str(result.data.inner))
+            result_dict[function.name] = result.data.inner
 
-            for future in concurrent.futures.as_completed(futures_to_handlers):
-                function = futures_to_handlers[future]
-                result, _ = future.result()
-                if result is None:
-                    raise ValueError(f"Failed to solve handlers for {function}")
-                if isinstance(result.data.inner, handlers.TestsError) and result.data.inner.score == 0:
-                    raise Exception(f"Failed to solve handlers for {function}: " + str(result.data.inner))
-                result_dict[function] = result.data.inner
+        async with anyio.create_task_group() as tg:
+            for fn in functions:
+                tg.start_soon(run_handler, fn)
 
         # Include feedback in the span data if provided
         output_data = {k: v.__dict__ if hasattr(v, "__dict__") else str(v) for k, v in result_dict.items()}
@@ -426,7 +421,7 @@ class Application:
         self.langfuse_client = langfuse_client or Langfuse()
         self.interaction_mode = interaction_mode
 
-    def prepare_bot(self, prompts: list[str], bot_id: str | None = None, capabilities: list[str] | None = None, *args, **kwargs) -> ApplicationPrepareOut:
+    async def prepare_bot(self, prompts: list[str], bot_id: str | None = None, capabilities: list[str] | None = None, *args, **kwargs) -> ApplicationPrepareOut:
         logger.info(f"Preparing bot with prompts: {prompts}")
         trace = self.langfuse_client.trace(
             id=kwargs.get("langfuse_observation_id", uuid.uuid4().hex),
@@ -440,7 +435,7 @@ class Application:
         fsm_states = self.make_fsm_states(trace.id, trace.id)
         fsm = statemachine.StateMachine[FSMContext](fsm_states, fsm_context)
         logger.info("Initialized state machine, sending PROMPT event")
-        fsm.send(FsmEvent.PROMPT)
+        await fsm.send(FsmEvent.PROMPT)
         logger.info(f"State machine finished at state: {fsm.stack_path[-1]}")
 
         result = {"capabilities": capabilities, "status": "processing"}
@@ -477,7 +472,7 @@ class Application:
             status=result.get("status", "success")
         )
 
-    def update_bot(self, typespec_schema: str, bot_id: str | None = None, capabilities: list[str] | None = None, *args, **kwargs) -> ApplicationOut:
+    async def update_bot(self, typespec_schema: str, bot_id: str | None = None, capabilities: list[str] | None = None, *args, **kwargs) -> ApplicationOut:
         logger.info(f"Updating bot with ID: {bot_id if bot_id else 'unknown'}")
         trace = self.langfuse_client.trace(
             id=kwargs.get("langfuse_observation_id", uuid.uuid4().hex),
@@ -511,7 +506,7 @@ class Application:
         fsm_states = self.make_fsm_states(trace.id, trace.id)
         fsm = statemachine.StateMachine[FSMContext](fsm_states, fsm_context)
         logger.info("Initialized state machine, sending CONFIRM event")
-        fsm.send(FsmEvent.CONFIRM)
+        await fsm.send(FsmEvent.CONFIRM)
         logger.info(f"State machine finished at state: {fsm.stack_path[-1]}")
 
         result = {"capabilities": capabilities}
@@ -614,8 +609,14 @@ class Application:
         handler_tests_target = self.get_next_state(FsmState.HANDLER_TESTS)
         handlers_target = self.get_next_state(FsmState.HANDLERS)
 
+        def fsm_ctx_set(key: str):
+            async def _set_val(ctx: FSMContext, value):
+                # Set the value in the context
+                ctx[key] = value
+            return _set_val
+
         # Base state configuration
-        states: statemachine.State = {
+        states: statemachine.State[FSMContext] = {
             "on": {
                 FsmEvent.PROMPT: FsmState.TYPESPEC,
                 FsmEvent.CONFIRM: FsmState.DRIZZLE,
@@ -631,11 +632,13 @@ class Application:
                         ),
                         "on_done": {
                             "target": typespec_target,
-                            "actions": [lambda ctx, event: ctx.update({"typespec_schema": event})],
+                            "actions": [fsm_ctx_set("typespec_schema")],
+                            #"actions": [lambda ctx, event: ctx.update({"typespec_schema": event})],
                         },
                         "on_error": {
                             "target": FsmState.FAILURE,
-                            "actions": [lambda ctx, event: ctx.update({"error": event})],
+                            "actions": [fsm_ctx_set("error")],
+                            #"actions": [lambda ctx, event: ctx.update({"error": event})],
                         },
                     },
                 },
@@ -649,11 +652,13 @@ class Application:
                         ),
                         "on_done": {
                             "target": drizzle_target,
-                            "actions": [lambda ctx, event: ctx.update({"drizzle_schema": event})],
+                            "actions": [fsm_ctx_set("drizzle_schema")],
+                            #"actions": [lambda ctx, event: ctx.update({"drizzle_schema": event})],
                         },
                         "on_error": {
                             "target": FsmState.FAILURE,
-                            "actions": [lambda ctx, event: ctx.update({"error": event})],
+                            "actions": [fsm_ctx_set("error")],
+                            #"actions": [lambda ctx, event: ctx.update({"error": event})],
                         },
                     }
                 },
@@ -663,11 +668,13 @@ class Application:
                         "input_fn": lambda ctx: (ctx["typespec_schema"].typespec, ctx.get("typescript_feedback")),
                         "on_done": {
                             "target": typescript_target,
-                            "actions": [lambda ctx, event: ctx.update({"typescript_schema": event})],
+                            "actions": [fsm_ctx_set("typescript_schema")],
+                            #"actions": [lambda ctx, event: ctx.update({"typescript_schema": event})],
                         },
                         "on_error": {
                             "target": FsmState.FAILURE,
-                            "actions": [lambda ctx, event: ctx.update({"error": event})],
+                            "actions": [fsm_ctx_set("error")],
+                            #"actions": [lambda ctx, event: ctx.update({"error": event})],
                         },
                     }
                 },
@@ -677,11 +684,13 @@ class Application:
                         "input_fn": lambda ctx: (ctx["typescript_schema"].functions, ctx["typescript_schema"].typescript_schema, ctx["drizzle_schema"].drizzle_schema, ctx.get("handler_tests_feedback")),
                         "on_done": {
                             "target": handler_tests_target,
-                            "actions": [lambda ctx, event: ctx.update({"handler_tests": event})],
+                            "actions": [fsm_ctx_set("handler_tests")],
+                            #"actions": [lambda ctx, event: ctx.update({"handler_tests": event})],
                         },
                         "on_error": {
                             "target": FsmState.FAILURE,
-                            "actions": [lambda ctx, event: ctx.update({"error": event})],
+                            "actions": [fsm_ctx_set("error")],
+                            #"actions": [lambda ctx, event: ctx.update({"error": event})],
                         },
                     }
                 },
@@ -691,11 +700,13 @@ class Application:
                         "input_fn": lambda ctx: (ctx["typescript_schema"].functions, ctx["typescript_schema"].typescript_schema, ctx["drizzle_schema"].drizzle_schema, ctx["handler_tests"], ctx.get("handlers_feedback")),
                         "on_done": {
                             "target": handlers_target,
-                            "actions": [lambda ctx, event: ctx.update({"handlers": event})],
+                            "actions": [fsm_ctx_set("handlers")],
+                            #"actions": [lambda ctx, event: ctx.update({"handlers": event})],
                         },
                         "on_error": {
                             "target": FsmState.FAILURE,
-                            "actions": [lambda ctx, event: ctx.update({"error": event})],
+                            "actions": [fsm_ctx_set("error")],
+                            #"actions": [lambda ctx, event: ctx.update({"error": event})],
                         },
                     }
                 },

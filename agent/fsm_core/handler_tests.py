@@ -2,7 +2,7 @@ from typing import Protocol, Self
 import re
 import jinja2
 from anthropic.types import MessageParam
-from compiler.core import Compiler, CompileResult
+from dag_compiler import Compiler, CompileResult
 from . import llm_common
 from .common import AgentMachine
 
@@ -512,7 +512,7 @@ class HandlerTestsMachine(AgentMachine[HandlerTestsContext]):
         tests = pattern.findall(output)
         return imports, tests
 
-    def on_message(self: Self, context: HandlerTestsContext, message: MessageParam) -> "HandlerTestsMachine":
+    async def on_message(self: Self, context: HandlerTestsContext, message: MessageParam) -> "HandlerTestsMachine":
         content = llm_common.pop_first_text(message)
         if content is None:
             raise RuntimeError(f"Failed to extract text from message: {message}")
@@ -527,8 +527,9 @@ class HandlerTestsMachine(AgentMachine[HandlerTestsContext]):
             imports=imports,
             tests=tests,
         )
-        linting_cmd = ["npx", "eslint", "-c", "eslint.config.mjs", "--fix", test_file_path]
-        [ts_feedback, linter_feedback] = context.compiler.compile_typescript({
+        print(f"TEST {self.function_name} ({test_file_path}):\n\n", source, "\n")
+        linting_cmd = ["bun", "run", "eslint", "-c", "eslint.config.mjs", "--fix", test_file_path]
+        [ts_feedback, linter_feedback] = await context.compiler.compile_typescript({
                 test_file_path: source,
                 "src/common/schema.ts": self.typescript_schema,
                 "src/db/schema/application.ts": self.drizzle_schema,

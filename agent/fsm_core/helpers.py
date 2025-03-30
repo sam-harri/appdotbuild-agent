@@ -1,4 +1,4 @@
-from typing import Callable
+from typing import Awaitable, Callable
 from anthropic import AnthropicBedrock
 from anthropic.types import MessageParam
 
@@ -79,15 +79,15 @@ def langfuse_expand[T](
     langfuse: Langfuse,
     langfuse_parent_trace_id: str,
     langfuse_parent_observation_id: str,
-) -> Callable[[Node[AgentState[T]]], Node[AgentState[T]]]:
-    def expand_fn(node: Node[AgentState[T]]) -> Node[AgentState[T]]:
+) -> Callable[[Node[AgentState[T]]], Awaitable[Node[AgentState[T]]]]:
+    async def expand_fn(node: Node[AgentState[T]]) -> Node[AgentState[T]]:
         span = langfuse.span(
             trace_id=langfuse_parent_trace_id,
             parent_observation_id=node._id if node.parent else langfuse_parent_observation_id,
             name="expand",
         )
         message = llm_fn([m for n in node.get_trajectory() for m in n.data.thread], span.generation())
-        new_node = Node(AgentState(node.data.inner.on_message(context, message), message), parent=node, id=span.id)
+        new_node = Node(AgentState(await node.data.inner.on_message(context, message), message), parent=node, id=span.id)
         span.end(
             output=new_node.data.inner.__dict__, # check
             metadata={"child_node_id": new_node._id, "parent_node_id": node._id},
@@ -96,7 +96,7 @@ def langfuse_expand[T](
     return expand_fn
 
 
-def agent_dfs[T](
+async def agent_dfs[T](
     init: common.AgentMachine[T],
     context: T,
     llm_fn: Callable[[list[MessageParam], StatefulGenerationClient], MessageParam],
@@ -115,7 +115,7 @@ def agent_dfs[T](
     )
     root = Node(common.AgentState(init, None), id=span.id)
     expand_fn = langfuse_expand(context, llm_fn, langfuse, langfuse_parent_trace_id, span.id)
-    solution = common.dfs_rewind(root, expand_fn, max_depth, max_width, max_budget)
+    solution = await common.dfs_rewind(root, expand_fn, max_depth, max_width, max_budget)
     span.end(
         output=solution.data.inner.__dict__ if solution else None, # check
         metadata={"child_node_id": root._id}

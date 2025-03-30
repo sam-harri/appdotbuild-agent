@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import re
 import jinja2
 from anthropic.types import MessageParam
-from compiler.core import Compiler, CompileResult
+from dag_compiler import Compiler, CompileResult
 from . import llm_common
 from .common import AgentMachine
 
@@ -220,7 +220,7 @@ class TypespecMachine(AgentMachine[TypespecContext]):
             raise ValueError("Failed to parse output, expected at least one function definition")
         return reasoning, definitions, functions
 
-    def on_message(self: Self, context: TypespecContext, message: MessageParam) -> "TypespecMachine":
+    async def on_message(self: Self, context: TypespecContext, message: MessageParam) -> "TypespecMachine":
         content = llm_common.pop_first_text(message)
         if content is None:
             raise RuntimeError(f"Failed to extract text from message: {message}")
@@ -237,7 +237,7 @@ class TypespecMachine(AgentMachine[TypespecContext]):
             "",
             typespec
         ])
-        feedback = context.compiler.compile_typespec(typespec_schema)
+        feedback = await context.compiler.compile_typespec(typespec_schema)
         if feedback["exit_code"] != 0:
             return CompileError(reasoning, typespec, llm_functions, feedback)
         return Success(reasoning, typespec, llm_functions, feedback)
@@ -300,7 +300,7 @@ class TypespecCompile:
 class CompileError(TypespecMachine, TypespecCompile):
     @property
     def next_message(self) -> MessageParam | None:
-        content = jinja2.Template(FIX_PROMPT).render(errors=self.feedback["stderr"])
+        content = jinja2.Template(FIX_PROMPT).render(errors=self.feedback["stdout"])
         return MessageParam(role="user", content=content)
 
 
@@ -311,7 +311,7 @@ class UserFeedback(TypespecMachine, TypespecCompile):
 
     @property
     def next_message(self) -> MessageParam | None:
-        content = jinja2.Template(FIX_PROMPT).render(errors=self.feedback["stderr"], additional_feedback=self.additional_feedback)
+        content = jinja2.Template(FIX_PROMPT).render(errors=self.feedback["stdout"], additional_feedback=self.additional_feedback)
         return MessageParam(role="user", content=content)
 
 

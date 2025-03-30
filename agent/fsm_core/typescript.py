@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import re
 import jinja2
 from anthropic.types import MessageParam
-from compiler.core import Compiler, CompileResult
+from dag_compiler import Compiler, CompileResult
 from . import llm_common
 from .common import AgentMachine
 
@@ -141,7 +141,7 @@ class TypescriptMachine(AgentMachine[TypescriptContext]):
             ))
         return reasoning, definitions, functions, type_to_zod
     
-    def on_message(self: Self, context: TypescriptContext, message: MessageParam) -> "TypescriptMachine":
+    async def on_message(self: Self, context: TypescriptContext, message: MessageParam) -> "TypescriptMachine":
         content = llm_common.pop_first_text(message)
         if content is None:
             raise RuntimeError(f"Failed to extract text from message: {message}")
@@ -149,7 +149,7 @@ class TypescriptMachine(AgentMachine[TypescriptContext]):
             reasoning, typescript_schema, functions, type_to_zod = self.parse_output(content)
         except ValueError as e:
             return FormattingError(e)
-        feedback = context.compiler.compile_typescript({"src/common/schema.ts": typescript_schema})
+        feedback = await context.compiler.compile_typescript({"src/common/schema.ts": typescript_schema})
         if feedback["exit_code"] != 0:
             return CompileError(reasoning, typescript_schema, functions, type_to_zod, feedback)
         return Success(reasoning, typescript_schema, functions, type_to_zod, feedback)

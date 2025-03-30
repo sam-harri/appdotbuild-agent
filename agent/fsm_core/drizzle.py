@@ -2,7 +2,7 @@ from typing import Protocol, Self
 import re
 import jinja2
 from anthropic.types import MessageParam
-from compiler.core import Compiler, CompileResult
+from dag_compiler import Compiler, CompileResult
 from . import llm_common
 from .common import AgentMachine
 
@@ -108,7 +108,7 @@ class DrizzleMachine(AgentMachine[DrizzleContext]):
         drizzle_schema = match.group(2).strip()
         return reasoning, drizzle_schema
     
-    def on_message(self: Self, context: DrizzleContext, message: MessageParam) -> "DrizzleMachine":
+    async def on_message(self: Self, context: DrizzleContext, message: MessageParam) -> "DrizzleMachine":
         content = llm_common.pop_first_text(message)
         if content is None:
             raise RuntimeError(f"Failed to extract text from message: {message}")
@@ -116,7 +116,7 @@ class DrizzleMachine(AgentMachine[DrizzleContext]):
             reasoning, drizzle_schema = self.parse_output(content)
         except ValueError as e:
             return FormattingError(e)
-        feedback = context.compiler.compile_drizzle(drizzle_schema)
+        feedback = await context.compiler.compile_drizzle(drizzle_schema)
         if feedback["exit_code"] != 0:
             return TypecheckError(reasoning, drizzle_schema, feedback)
         if feedback["stderr"]:

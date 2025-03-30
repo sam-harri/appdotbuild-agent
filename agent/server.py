@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from anthropic import AnthropicBedrock
 from core.interpolator import Interpolator
 from application import Application, InteractionMode
-from compiler.core import Compiler
+from dag_compiler import Compiler
 import capabilities as cap_module
 from iteration import get_typespec_metadata, get_scenarios_message
 from common import get_logger, init_sentry
@@ -22,7 +22,7 @@ logger = get_logger(__name__)
 init_sentry()
 
 client = AnthropicBedrock(aws_region="us-west-2")
-compiler = Compiler("botbuild/tsp_compiler", "botbuild/app_schema")
+compiler = Compiler()
 
 app = FastAPI()
 
