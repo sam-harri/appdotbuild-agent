@@ -1,4 +1,5 @@
 from typing import TypedDict, overload
+import os
 from dagger import dag, Container, Service, ReturnType
 from logging import getLogger
 
@@ -13,13 +14,14 @@ class CompileResult(TypedDict):
 
 
 class Compiler:
-    def __init__(self):
+    def __init__(self, root_path: str = "."):
+        tpl_path = os.path.join(root_path, "templates")
         self.tsp_image = (
             dag
             .container()
             .from_("node:23-alpine")
             .with_workdir("/app")
-            .with_directory("/app", dag.host().directory("./templates/tsp_schema", exclude=["node_modules"]))
+            .with_directory("/app", dag.host().directory(os.path.join(tpl_path, "tsp_schema"), exclude=["node_modules"]))
             .with_exec(["npm", "install", "-g", "@typespec/compiler"])
             .with_exec(["tsp", "install"])
         )
@@ -28,7 +30,7 @@ class Compiler:
             .container()
             .from_("oven/bun:1.2.5-alpine")
             .with_workdir("/app")
-            .with_directory("/app", dag.host().directory("./templates/app_schema", exclude=["node_modules"]))
+            .with_directory("/app", dag.host().directory(os.path.join(tpl_path, "app_schema"), exclude=["node_modules"]))
             .with_exec(["bun", "install"])
         )
 

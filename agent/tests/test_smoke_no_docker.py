@@ -225,7 +225,7 @@ async def test_application_no_docker():
             with patch('statemachine.StateMachine', MockStateMachine):
                 # Set up test
                 async with dagger.connection(dagger.Config(log_output=sys.stderr)):
-                    compiler = Compiler()
+                    compiler = Compiler("./agent")
                     client = MagicMock(spec=AnthropicBedrock)
                     
                     # Create application and run test

@@ -47,7 +47,7 @@ async def test_end2end(initial_description: str = DEFAULT_PROMPT, mode: CacheMod
     """Full bot creation and update workflow"""
     # Use the correct Docker image names from prepare_containers.sh
     async with dagger.connection(dagger.Config(log_output=sys.stderr)):
-        compiler = Compiler()
+        compiler = Compiler("./agent")
         client = get_sync_client(cache_mode=mode)
         application = Application(client, compiler)
         langfuse_context.configure(enabled=False)
