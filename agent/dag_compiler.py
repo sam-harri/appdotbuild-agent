@@ -49,7 +49,7 @@ class Compiler:
         container = (
             self.app_image
             .with_service_binding("postgres", self.tmp_postgres())
-            .with_env_variable("DATABASE_URL", "postgres://postgres:postgres@postgres:5432/postgres")
+            .with_env_variable("APP_DATABASE_URL", "postgres://postgres:postgres@postgres:5432/postgres")
             .with_new_file("src/db/schema/application.ts", schema)
         )
         result = await self.exec_demux(container, ["bun", "run", "tsc", "--noEmit"])
@@ -70,7 +70,7 @@ class Compiler:
         container = (
             self.app_image
             .with_service_binding("postgres", self.tmp_postgres())
-            .with_env_variable("DATABASE_URL", "postgres://postgres:postgres@postgres:5432/postgres")
+            .with_env_variable("APP_DATABASE_URL", "postgres://postgres:postgres@postgres:5432/postgres")
         )
         for path, content in files.items():
             container = container.with_new_file(path, content)
