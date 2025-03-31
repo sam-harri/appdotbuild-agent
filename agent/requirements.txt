@@ -47,7 +47,6 @@ pydantic_core==2.27.2
 Pygments==2.19.1
 python-dateutil==2.9.0.post0
 pytest==8.3.4
-pytest-asyncio==0.26.0
 pyzmq==26.2.0
 s3transfer==0.10.4
 sentry-sdk==2.22.0
