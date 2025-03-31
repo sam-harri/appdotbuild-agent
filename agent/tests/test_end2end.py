@@ -10,6 +10,7 @@ import time
 import docker
 import shutil
 import httpx
+import pytest
 
 from fire import Fire
 from langfuse.decorators import langfuse_context

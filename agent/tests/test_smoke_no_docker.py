@@ -1,6 +1,5 @@
 import sys
 import os
-import pytest
 from unittest.mock import MagicMock, patch
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -8,8 +7,6 @@ from dag_compiler import Compiler
 from application import Application
 from anthropic import AnthropicBedrock
 
-
-pytestmark = pytest.mark.anyio
 
 
 async def test_application_no_docker():
