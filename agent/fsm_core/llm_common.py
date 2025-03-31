@@ -1,7 +1,6 @@
 from typing import Union, TypeVar, Dict, Any, Optional, List, cast, Literal, Protocol
 from anthropic.types import MessageParam, TextBlock, Message
 from anthropic import AnthropicBedrock, Anthropic
-from functools import partial
 import json
 import hashlib
 import os
@@ -29,11 +28,13 @@ class LLMClient:
                  backend: str,
                  model_name: str,
                  cache_mode: CacheMode = "off",
-                 cache_path: str = "llm_cache.json"):
+                 cache_path: str = "llm_cache.json",
+                 client_params: dict = {}):
         self.backend = backend
         self.short_model_name = model_name
         self.cache_mode = cache_mode
         self.cache_path = cache_path
+        self._client_params = client_params or {}
         self._cache = self._load_cache() if cache_mode == "replay" else {}
         self._client = None  # Subclasses must initialize this
         self.model_name = None  # Subclasses should set this based on model mappings
@@ -101,14 +102,15 @@ class AnthropicClient(LLMClient):
                  backend: str = "bedrock",
                  model_name: str = "sonnet",
                  cache_mode: CacheMode = "off",
-                 cache_path: str = "anthropic_cache.json"):
-        super().__init__(backend, model_name, cache_mode, cache_path)
+                 cache_path: str = "anthropic_cache.json",
+                 client_params: dict = {}):
+        super().__init__(backend, model_name, cache_mode, cache_path, client_params=client_params)
 
         match backend:
             case "bedrock":
-                self._client = AnthropicBedrock()
+                self._client = AnthropicBedrock(**(client_params or {}))
             case "anthropic":
-                self._client = Anthropic()
+                self._client = Anthropic(**(client_params or {}))
             case _:
                 raise ValueError(f"Unknown backend: {backend}")
 
@@ -179,15 +181,17 @@ class GeminiClient(LLMClient):
                  model_name: str = "gemini-pro",
                  cache_mode: CacheMode = "off",
                  cache_path: str = "gemini_cache.json",
-                 api_key: str | None = None):
-        super().__init__("gemini", model_name, cache_mode, cache_path)
+                 api_key: str | None = None,
+                 client_params: dict = {}
+                 ):
+        super().__init__("gemini", model_name, cache_mode, cache_path, client_params=client_params)
 
         # Initialize the Gemini client
         self._api_key = api_key or os.environ.get("GEMINI_API_KEY")
         if not self._api_key:
             raise ValueError("GEMINI_API_KEY environment variable or api_key parameter is required")
 
-        self._client = genai.Client(api_key=self._api_key)
+        self._client = genai.Client(api_key=self._api_key, **(client_params or {}))
 
         # Map friendly model names to actual model identifiers
         self.models_map = {
@@ -312,14 +316,16 @@ def get_sync_client(
     model_name: str = "sonnet",
     cache_mode: CacheMode = "off",
     cache_path: str = os.path.join(os.path.dirname(__file__), "../../anthropic_cache.json"),
-    api_key: str | None = None
+    api_key: str | None = None,
+    client_params: dict = None
 ) -> Union[AnthropicClient, GeminiClient]:
     if backend in ["bedrock", "anthropic"]:
         return AnthropicClient(
             backend=backend,
             model_name=model_name,
             cache_mode=cache_mode,
-            cache_path=cache_path
+            cache_path=cache_path,
+            client_params=client_params
         )
     elif backend == "gemini":
         gemini_cache_path = os.path.join(os.path.dirname(cache_path), "gemini_cache.json")
@@ -327,7 +333,8 @@ def get_sync_client(
             model_name=model_name,
             cache_mode=cache_mode,
             cache_path=gemini_cache_path,
-            api_key=api_key
+            api_key=api_key,
+            client_params=client_params
         )
     else:
         raise ValueError(f"Unknown backend: {backend}")
