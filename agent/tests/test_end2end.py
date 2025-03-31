@@ -2,6 +2,7 @@ import tempfile
 import uuid
 import random
 import os
+import sys
 import anyio
 import logging
 import string
@@ -15,11 +16,21 @@ import pytest
 from fire import Fire
 from langfuse.decorators import langfuse_context
 
+import dagger
 from application import Application
 from dag_compiler import Compiler
 from core.interpolator import Interpolator
 from fsm_core.llm_common import get_sync_client, CacheMode
 from common import get_logger
+
+
+pytestmark = pytest.mark.anyio
+
+
+@pytest.fixture
+def anyio_backend():
+    return 'asyncio'
+
 
 logger = get_logger(__name__)
 
@@ -35,18 +46,19 @@ def generate_random_name(prefix, length=8):
 async def test_end2end(initial_description: str = DEFAULT_PROMPT, mode: CacheMode = "replay"):
     """Full bot creation and update workflow"""
     # Use the correct Docker image names from prepare_containers.sh
-    compiler = Compiler()
-    client = get_sync_client(cache_mode=mode)
-    application = Application(client, compiler)
-    langfuse_context.configure(enabled=False)
+    async with dagger.connection(dagger.Config(log_output=sys.stderr)):
+        compiler = Compiler()
+        client = get_sync_client(cache_mode=mode)
+        application = Application(client, compiler)
+        langfuse_context.configure(enabled=False)
 
-    bot_id = str(uuid.uuid4().hex)
-    prepared_bot = await application.prepare_bot([initial_description], bot_id=bot_id)
-    my_bot = await application.update_bot(
-        typespec_schema=prepared_bot.typespec.typespec_definitions or "",
-        bot_id=bot_id,
-        capabilities=prepared_bot.capabilities.capabilities or [],
-    )
+        bot_id = str(uuid.uuid4().hex)
+        prepared_bot = await application.prepare_bot([initial_description], bot_id=bot_id)
+        my_bot = await application.update_bot(
+            typespec_schema=prepared_bot.typespec.typespec_definitions or "",
+            bot_id=bot_id,
+            capabilities=prepared_bot.capabilities.capabilities or [],
+        )
 
     with tempfile.TemporaryDirectory() as temp_dir:
         current_dir = os.path.dirname(os.path.abspath(__file__))

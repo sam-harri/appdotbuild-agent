@@ -3,6 +3,7 @@ import os
 from unittest.mock import MagicMock, patch
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import dagger
 from dag_compiler import Compiler
 from application import Application
 from anthropic import AnthropicBedrock
@@ -223,17 +224,18 @@ async def test_application_no_docker():
         with patch('langfuse.Langfuse', return_value=mock_langfuse):
             with patch('statemachine.StateMachine', MockStateMachine):
                 # Set up test
-                compiler = Compiler()
-                client = MagicMock(spec=AnthropicBedrock)
-                
-                # Create application and run test
-                application = Application(client, compiler)
-                
-                # Test prepare_bot with known trace IDs for predictable output
-                prepared_bot = await application.prepare_bot(
-                    ["Create a test bot"], 
-                    langfuse_observation_id="mock-trace-id"
-                )
+                async with dagger.connection(dagger.Config(log_output=sys.stderr)):
+                    compiler = Compiler()
+                    client = MagicMock(spec=AnthropicBedrock)
+                    
+                    # Create application and run test
+                    application = Application(client, compiler)
+                    
+                    # Test prepare_bot with known trace IDs for predictable output
+                    prepared_bot = await application.prepare_bot(
+                        ["Create a test bot"], 
+                        langfuse_observation_id="mock-trace-id"
+                    )
                 
                 # Verify prepare_bot output
                 assert prepared_bot.typespec is not None
@@ -269,10 +271,11 @@ async def test_application_no_docker():
                 }
                 </typespec>
                 """
-                my_bot = await application.update_bot(
-                    test_typespec,
-                    langfuse_observation_id="mock-trace-id"
-                )
+                async with dagger.connection(dagger.Config(log_output=sys.stderr)):
+                    my_bot = await application.update_bot(
+                        test_typespec,
+                        langfuse_observation_id="mock-trace-id"
+                    )
                 
                 # Verify update_bot output
                 assert my_bot.typespec is not None
