@@ -85,10 +85,8 @@ def create_state(actor: SimpleActor) -> State[SimpleContext]:
 async def test_checkpoint_recovery():
     machine = StateMachine(create_state(SimpleActor()), SimpleContext())
     # Trigger transition: event "go" transitions from root to A and then, via invoke, to B.
-    print("before", machine.dump())
     await machine.send("go")
     checkpoint = machine.dump()
-    print("after", machine.dump())
 
     # Load a new machine from the checkpoint.
     loaded_machine = StateMachine[SimpleContext].load(create_state(SimpleActor()), checkpoint, SimpleContext)
@@ -123,8 +121,3 @@ async def test_recovered_behavior():
     original_actor = machine.root["states"]["A"]["invoke"]["src"]
     loaded_actor = loaded_machine.root["states"]["A"]["invoke"]["src"]
     assert original_actor.dump() == loaded_actor.dump()
-
-
-if __name__ == "__main__":
-    # Run the tests
-    pytest.main([__file__])
