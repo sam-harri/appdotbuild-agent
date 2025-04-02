@@ -34,9 +34,12 @@ def test_end2end(initial_description: str = DEFAULT_PROMPT, mode: CacheMode = "r
     """Full bot creation and update workflow"""
     # Use the correct Docker image names from prepare_containers.sh
     compiler = Compiler("botbuild/tsp_compiler", "botbuild/app_schema")
-    client = get_sync_client(cache_mode=mode)
+    client = get_sync_client(
+        cache_mode=mode,
+        model_name="sonnet",
+    )
     application = Application(client, compiler)
-    langfuse_context.configure(enabled=False)
+    langfuse_context.configure(enabled=bool(os.getenv("LANGFUSE_ENABLED", "")))
 
     bot_id = str(uuid.uuid4().hex)
     prepared_bot = application.prepare_bot([initial_description], bot_id=bot_id)
@@ -136,10 +139,13 @@ def test_end2end(initial_description: str = DEFAULT_PROMPT, mode: CacheMode = "r
                 logger.exception(f"Error downing docker compose: {e}")
                 raise e
             os.chdir(dir_to_return)
+
+
 def update_cache(
     prompt: str = DEFAULT_PROMPT,
+    mode: CacheMode = "record",
 ):
-    test_end2end(prompt, mode="record")
+    test_end2end(prompt, mode=mode)
 
 
 if __name__ == "__main__":
