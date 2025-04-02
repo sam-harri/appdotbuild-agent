@@ -5,30 +5,30 @@ class Actor(Protocol):
     async def execute(self, *args, **kwargs) -> Any:
         ...
 
-    def dump(self) -> dict:
+    async def dump(self) -> object:
         ...
 
-    def load(self, data: dict):
+    async def load(self, data: object):
         ...
 
 
 class Context(Protocol):
-    def dump(self) -> dict:
+    def dump(self) -> object:
         ...
     
     @classmethod
-    def load(cls, data: dict) -> Self:
+    def load(cls, data: object) -> Self:
         ...
 
 
 class ActorCheckpoint(TypedDict):
     path: list[str]
-    data: dict
+    data: object
 
 
-class Checkpoint(TypedDict):
+class MachineCheckpoint(TypedDict):
     stack_path: list[str]
-    context: dict
+    context: object
     actors: list[ActorCheckpoint]
 
 
@@ -150,24 +150,20 @@ class StateMachine[T: Context]:
                         await action(self.context)
                     return
     
-    def dump(self) -> Checkpoint:
-        actors = []
-        stack, visited = [(self.root, [])], set()
+    async def dump(self) -> MachineCheckpoint:
+        stack, actors = [(self.root, [])], []
         while stack:
             current, path = stack.pop()
-            if id(current) in visited:
-                continue
-            visited.add(id(current))
             if "invoke" in current:
                 actors.append({
                     "path": path,
-                    "data": current["invoke"]["src"].dump(),
+                    "data": await current["invoke"]["src"].dump(),
                 })
             if "states" not in current:
                 continue
             for key, value in current["states"].items():
                 stack.append((value, path + [key]))
-        checkpoint: Checkpoint = {
+        checkpoint: MachineCheckpoint = {
             "stack_path": self.stack_path,
             "context": self.context.dump(),
             "actors": actors,
@@ -175,17 +171,14 @@ class StateMachine[T: Context]:
         return checkpoint
     
     @classmethod
-    def load(cls, root: State[T], data: Checkpoint, context_type: type[T]) -> Self:
-        stack, visited = [(root, [])], set()
+    async def load(cls, root: State[T], data: MachineCheckpoint, context_type: type[T]) -> Self:
+        stack = [(root, [])]
         while stack:
             current, path = stack.pop()
-            if id(current) in visited:
-                continue
-            visited.add(id(current))
             if "invoke" in current:
                 for actor in data["actors"]:
                     if actor["path"] == path:
-                        current["invoke"]["src"].load(actor["data"])
+                        await current["invoke"]["src"].load(actor["data"])
             if "states" not in current:
                 continue
             for key, value in current["states"].items():

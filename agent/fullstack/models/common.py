@@ -1,4 +1,4 @@
-from typing import Literal, Protocol, Iterable, TypedDict, TypeAlias, Union, Required
+from typing import Literal, Protocol, Self, Iterable, TypedDict, TypeAlias, Union, Required
 from dataclasses import dataclass
 
 
@@ -44,6 +44,50 @@ ContentBlock: TypeAlias = Union[TextRaw, ToolUse, ToolUseResult, ThinkingBlock]
 class Message:
     role: Literal["user", "assistant"]
     content: Iterable[ContentBlock]
+
+    def to_dict(self) -> dict:
+        content = []
+        for block in self.content:
+            match block:
+                case TextRaw(text):
+                    content.append({"type": "text", "text": text})
+                case ToolUse(name, input, id):
+                    content.append({"type": "tool_use", "name": name, "input": input, "id": id})
+                case ThinkingBlock(thinking):
+                    content.append({"type": "thinking", "thinking": thinking})
+                case ToolUseResult(tool_use, tool_result):
+                    content.append({
+                        "type": "tool_use_result",
+                        "tool_use": {
+                            "name": tool_use.name,
+                            "input": tool_use.input,
+                            "id": tool_use.id,
+                        },
+                        "tool_result": {
+                            "content": tool_result.content,
+                            "name": tool_result.name,
+                            "is_error": tool_result.is_error,
+                        },
+                    })
+        return {"role": self.role, "content": content}
+    
+    @classmethod
+    def from_dict(cls, data: dict) -> Self:
+        content = []
+        for block in data["content"]:
+            match block:
+                case {"type": "text", "text": text}:
+                    content.append(TextRaw(text))
+                case {"type": "tool_use", "name": name, "input": input, "id": id}:
+                    content.append(ToolUse(name, input, id))
+                case {"type": "thinking", "thinking": thinking}:
+                    content.append(ThinkingBlock(thinking))
+                case {"type": "tool_use_result", "tool_use": tool_use, "tool_result": tool_result}:
+                    content.append(ToolUseResult(
+                        ToolUse(tool_use["name"], tool_use["input"], tool_use["id"]),
+                        ToolResult(tool_result["content"], tool_result["name"], tool_result["is_error"])
+                    ))
+        return cls(data["role"], content)
 
 
 @dataclass

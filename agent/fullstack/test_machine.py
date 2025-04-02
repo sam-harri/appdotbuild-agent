@@ -33,10 +33,10 @@ class SimpleActor:
         self.log.append("actor_executed")
         return "done"
 
-    def dump(self) -> dict:
+    async def dump(self) -> dict:
         return {"log": self.log.copy()}
 
-    def load(self, data: dict):
+    async def load(self, data: dict):
         self.log = data["log"]
 
 
@@ -83,13 +83,13 @@ def create_state(actor: SimpleActor) -> State[SimpleContext]:
 
 
 async def test_checkpoint_recovery():
-    machine = StateMachine(create_state(SimpleActor()), SimpleContext())
+    machine = StateMachine[SimpleContext](create_state(SimpleActor()), SimpleContext())
     # Trigger transition: event "go" transitions from root to A and then, via invoke, to B.
     await machine.send("go")
-    checkpoint = machine.dump()
+    checkpoint = await machine.dump()
 
     # Load a new machine from the checkpoint.
-    loaded_machine = StateMachine[SimpleContext].load(create_state(SimpleActor()), checkpoint, SimpleContext)
+    loaded_machine = await StateMachine[SimpleContext].load(create_state(SimpleActor()), checkpoint, SimpleContext)
 
     # Assert that the recovered state's stack path is equal to the original.
     assert machine.stack_path == loaded_machine.stack_path
@@ -100,18 +100,18 @@ async def test_checkpoint_recovery():
     # Retrieve actor instances from the state machine structure.
     original_actor = machine.root["states"]["A"]["invoke"]["src"]
     loaded_actor = loaded_machine.root["states"]["A"]["invoke"]["src"]
-    assert original_actor.dump() == loaded_actor.dump()
+    assert await original_actor.dump() == await loaded_actor.dump()
 
 
 async def test_recovered_behavior():
-    machine = StateMachine(create_state(SimpleActor()), SimpleContext())
+    machine = StateMachine[SimpleContext](create_state(SimpleActor()), SimpleContext())
     await machine.send("go")
-    checkpoint = machine.dump()
+    checkpoint = await machine.dump()
 
     # Trigger on original
     await machine.send("reset")
 
-    loaded_machine = StateMachine[SimpleContext].load(create_state(SimpleActor()), checkpoint, SimpleContext)
+    loaded_machine = await StateMachine[SimpleContext].load(create_state(SimpleActor()), checkpoint, SimpleContext)
     await loaded_machine.send("reset")
 
     # Both machines should show identical context logs after the reset.
@@ -120,4 +120,4 @@ async def test_recovered_behavior():
     # Both machines should have same actor logs after the reset.
     original_actor = machine.root["states"]["A"]["invoke"]["src"]
     loaded_actor = loaded_machine.root["states"]["A"]["invoke"]["src"]
-    assert original_actor.dump() == loaded_actor.dump()
+    assert await original_actor.dump() == await loaded_actor.dump()
