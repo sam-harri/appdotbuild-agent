@@ -1,5 +1,4 @@
 from typing import List, Dict, Any, Optional, Tuple, TypedDict
-import uuid
 import logging
 import coloredlogs
 import sys
@@ -7,21 +6,17 @@ from dataclasses import dataclass
 from anthropic.types import MessageParam
 from fire import Fire
 import jinja2
-from fsm_core.llm_common import AnthropicClient, get_sync_client
+from fsm_core.llm_common import LLMClient, get_sync_client
 
-from api.fsm_api import (
-    start_fsm,
-    confirm_state,
-    provide_feedback,
-    complete_fsm,
-    is_active
-)
-from application import FsmState
+from api.fsm_api import FSMManager
+from application import FsmState, Application
+from core.datatypes import ApplicationOut
+from core.interpolator import Interpolator
+from common import get_logger
 
 # Configure logging to use stderr instead of stdout
 coloredlogs.install(level="INFO", stream=sys.stderr)
-logger = logging.getLogger(__name__)
-
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -41,12 +36,21 @@ class ToolResult:
 
 
 class FSMToolProcessor:
-    """Processor for FSM-related tools that can be used by AI agents"""
+    """
+    Thin adapter that exposes FSM functionality as tools for AI agents.
 
-    def __init__(self):
-        # For tracking last session updates
-        self.last_update = None
-        self.current_state = None
+    This class only contains the tool interface definitions and minimal
+    logic to convert between tool calls and FSM API calls.
+    """
+
+    def __init__(self, fsm_api: FSMManager):
+        """
+        Initialize the FSM Tool Processor
+
+        Args:
+            fsm_api: FSM API implementation to use
+        """
+        self.fsm_api = fsm_api
 
         # Define tool definitions for the AI agent
         self.tool_definitions = [
@@ -116,40 +120,15 @@ class FSMToolProcessor:
             logger.info(f"[FSMTools] Starting new FSM session with description: {app_description}")
 
             # Check if there's an active session first
-            if is_active():
+            if self.fsm_api.is_active():
                 logger.warning("[FSMTools] There's an active FSM session already. Completing it before starting a new one.")
-                complete_fsm()
+                self.fsm_api.complete_fsm()
 
-            result = start_fsm(user_input=app_description)
+            result = self.fsm_api.start_fsm(user_input=app_description)
 
-            # Check for any form of failure
-            has_error = False
-            error_msg = ""
-
-            # Check for explicit errors
+            # Return error if result contains error
             if "error" in result:
-                error_msg = result["error"]
-                logger.error(f"[FSMTools] Error starting FSM: {error_msg}")
-                has_error = True
-
-            # Check state - might be failure or complete (indicates something went wrong)
-            current_state = result.get("current_state")
-            if current_state == "failure" or current_state == FsmState.FAILURE:
-                error_msg = "FSM entered FAILURE state during initialization"
-                logger.error(f"[FSMTools] {error_msg}")
-                has_error = True
-            elif current_state == "complete" or current_state == FsmState.COMPLETE:
-                error_msg = "FSM immediately entered COMPLETE state, which indicates the process did not run properly"
-                logger.error(f"[FSMTools] {error_msg}")
-                has_error = True
-
-            # Return error if any checks failed
-            if has_error:
-                return ToolResult(success=False, error=error_msg, data=result)
-
-            # Success case
-            self.last_update = uuid.uuid4().hex
-            self.current_state = current_state
+                return ToolResult(success=False, error=result["error"], data=result)
 
             logger.info(f"[FSMTools] Started FSM session")
             return ToolResult(success=True, data=result)
@@ -161,147 +140,124 @@ class FSMToolProcessor:
     def tool_confirm_state(self) -> ToolResult:
         """Tool implementation for confirming the current state"""
         try:
-            if not is_active():
+            if not self.fsm_api.is_active():
                 logger.error("[FSMTools] No active FSM session")
                 return ToolResult(success=False, error="No active FSM session")
 
             logger.info("[FSMTools] Confirming current state")
-            result = confirm_state()
+            result = self.fsm_api.confirm_state()
 
-            # Update session tracking
-            current_state = result.get("current_state")
+            # Return error if result contains error
+            if "error" in result:
+                return ToolResult(success=False, error=result["error"], data=result)
 
-            # Check for FAILURE state or errors
-            if current_state == "failure" or "error" in result:
-                error_msg = result.get("error", "Unknown error occurred")
-                logger.error(f"[FSMTools] FSM entered FAILURE state: {error_msg}")
-                success = False
-                # If we're in a failure state, include detailed error information
-                if "error" not in result:
-                    result["error"] = f"FSM entered FAILURE state: {error_msg}"
-            else:
-                self.current_state = current_state
-                self.last_update = uuid.uuid4().hex
-                success = True
-
-            logger.info(f"[FSMTools] FSM advanced to state {current_state}")
-            return ToolResult(success=success, data=result,
-                             error=result.get("error"))
+            logger.info(f"[FSMTools] FSM advanced to state {result.get('current_state')}")
+            return ToolResult(success=True, data=result)
 
         except Exception as e:
-            logger.error(f"[FSMTools] Error confirming state: {str(e)}")
+            logger.exception(f"[FSMTools] Error confirming state: {str(e)}")
             return ToolResult(success=False, error=f"Failed to confirm state: {str(e)}")
 
     def tool_provide_feedback(self, feedback: str, component_name: str = None) -> ToolResult:
         """Tool implementation for providing feedback"""
         try:
-            if not is_active():
+            if not self.fsm_api.is_active():
                 logger.error("[FSMTools] No active FSM session")
                 return ToolResult(success=False, error="No active FSM session")
 
             logger.info(f"[FSMTools] Providing feedback")
 
-            result = provide_feedback(
+            result = self.fsm_api.provide_feedback(
                 feedback=feedback,
                 component_name=component_name
             )
 
-            # Update session tracking
-            if "error" not in result:
-                self.current_state = result.get("current_state")
-                self.last_update = uuid.uuid4().hex
+            # Return error if result contains error
+            if "error" in result:
+                return ToolResult(success=False, error=result["error"], data=result)
 
-            # Check if we entered FAILURE state, which means FSM encountered an error
-            current_state = result.get("current_state")
-            if current_state == FsmState.FAILURE:
-                error_msg = result.get("error", "FSM entered FAILURE state without specific error message")
-                logger.error(f"[FSMTools] FSM entered FAILURE state during feedback processing: {error_msg}")
-                return ToolResult(success=False, error=error_msg, data=result)
-
-            logger.info(f"[FSMTools] FSM updated with feedback, now in state {current_state}")
-            return ToolResult(success="error" not in result, data=result,
-                             error=result.get("error"))
+            logger.info(f"[FSMTools] FSM updated with feedback, now in state {result.get('current_state')}")
+            return ToolResult(success=True, data=result)
 
         except Exception as e:
-            logger.error(f"[FSMTools] Error providing feedback: {str(e)}")
+            logger.exception(f"[FSMTools] Error providing feedback: {str(e)}")
             return ToolResult(success=False, error=f"Failed to provide feedback: {str(e)}")
 
     def tool_complete_fsm(self) -> ToolResult:
         """Tool implementation for completing the FSM and getting all artifacts"""
         try:
-            if not is_active():
+            if not self.fsm_api.is_active():
                 logger.error("[FSMTools] No active FSM session")
                 return ToolResult(success=False, error="No active FSM session")
 
             logger.info("[FSMTools] Completing FSM session")
 
-            result = complete_fsm()
+            result = self.fsm_api.complete_fsm()
 
-            # Check for both explicit errors and "silent failures"
+            # Check for errors in result
             if "error" in result:
                 logger.error(f"[FSMTools] FSM completion failed with error: {result['error']}")
-                success = False
-            elif result.get("status") == "failed":
-                logger.error("[FSMTools] FSM completion failed with status 'failed'")
-                success = False
-            elif result.get("final_outputs") == {} or not result.get("final_outputs"):
-                # Empty outputs typically indicate a failure
+                return ToolResult(success=False, error=result["error"], data=result)
+
+            # Check for silent failures
+            if result.get("status") == "failed":
+                error_msg = "FSM completion failed with status 'failed'"
+                logger.error(f"[FSMTools] {error_msg}")
+                return ToolResult(success=False, error=error_msg, data=result)
+
+            # Check for empty outputs
+            if result.get("final_outputs") == {} or not result.get("final_outputs"):
                 error_msg = "FSM completed without generating any artifacts"
                 logger.error(f"[FSMTools] {error_msg}")
-                result["error"] = error_msg
-                result["status"] = "failed"
-                success = False
-            else:
-                # Success case
-                self.current_state = None
-                self.last_update = None
-                success = True
+                return ToolResult(success=False, error=error_msg, data=result)
 
-            logger.info(f"[FSMTools] FSM completed with status {result.get('status', 'error')}")
-            return ToolResult(success=success, data=result,
-                             error=result.get("error"))
+            # Convert the result to an ApplicationOut object for consistent output format
+            final_output = ApplicationOut.from_context(self.fsm_api.fsm_instance.context)
+
+            # Include both the raw result and the structured output
+            result["application_out"] = final_output
+
+            logger.info(f"[FSMTools] FSM completed successfully")
+            return ToolResult(success=True, data=result)
 
         except Exception as e:
-            logger.error(f"[FSMTools] Error completing FSM: {str(e)}")
+            logger.exception(f"[FSMTools] Error completing FSM: {str(e)}")
             return ToolResult(success=False, error=f"Failed to complete FSM: {str(e)}")
 
-def run_with_claude(processor: FSMToolProcessor, client: AnthropicClient,
-                   messages: List[MessageParam]) -> Tuple[List[MessageParam], bool]:
+
+def run_with_claude(processor: FSMToolProcessor, client: LLMClient,
+                   messages: List[MessageParam]) -> Tuple[List[MessageParam], bool, ToolResult | None]:
     """
     Send messages to Claude with FSM tool definitions and process tool use responses.
 
     Args:
         processor: FSMToolProcessor instance with tool implementation
-        client: AnthropicBedrock client instance
+        client: LLM client instance
         messages: List of messages to send to Claude
 
-    Returns:
-        Tuple of (followup_messages, is_complete)
     """
     response = client.messages.create(
         messages=messages,
         max_tokens=1024 * 16,
-        model="anthropic.claude-3-5-haiku-20241022-v1:0",
         stream=False,
         tools=processor.tool_definitions,
     )
 
     # Record if any tool was used (requiring further processing)
-    is_complete = True
+    is_complete = False
+    final_tool_result = None
     tool_results = []
 
     # Process all content blocks in the response
     for message in response.content:
         match message.type:
             case "text":
-                is_complete = True  # No tools used, so the task is complete
                 logger.info(f"[Claude Response] Message: {message.text}")
             case "tool_use":
-                is_complete = False  # Tool was used, so we need to continue
                 tool_use = message.to_dict()
-                logger.info(f"[Claude Response] Tool use: {tool_use['name']}")
 
                 tool_params = tool_use['input']
+                logger.info(f"[Claude Response] Tool use: {tool_use['name']}, params: {tool_params}")
                 tool_method = processor.tool_mapping.get(tool_use['name'])
 
                 if tool_method:
@@ -311,35 +267,34 @@ def run_with_claude(processor: FSMToolProcessor, client: AnthropicClient,
                     # Special cases for determining if the interaction is complete
                     if tool_use["name"] == "complete_fsm" and result.success:
                         is_complete = True
+                        final_tool_result = result
 
                     # Add result to the tool results list
                     tool_results.append({
                         "tool": tool_use['name'],
                         "result": result
                     })
+                else:
+                    raise ValueError(f"Unexpected tool name: {tool_use['name']}")
             case _:
                 raise ValueError(f"Unexpected message type: {message.type}")
 
     # Create a single new message with all tool results
-
     if tool_results:
         _template = """
         <tool>
         {{ tool_name }}
         </tool>
-
         {% if data %}
         <result>
         {{ data | safe }}
         </result>
         {% endif %}
-
         {% if error %}
         <error>
         {{ error }}
         </error>
         {% endif %}
-
         """.rstrip()
         template = jinja2.Template(_template)
         # Format the tool results nicely
@@ -351,17 +306,17 @@ def run_with_claude(processor: FSMToolProcessor, client: AnthropicClient,
             is_success = tool_result.success
             data = tool_result.data
             error = tool_result.error
-
             formatted_results.append(template.render(tool_name=tool_name, data=data, error=error))
 
         new_message = {
             "role": "user",
-            "content": f"Tool execution results:\n{"\n".join(formatted_results)}\nPlease continue based on these results, addressing any failures or errors if they exist."
+            "content": f"Tool execution results:\n{'\n'.join(formatted_results)}\nPlease continue based on these results, addressing any failures or errors if they exist."
         }
-        return messages + [new_message], is_complete
+        return messages + [new_message], is_complete, final_tool_result
     else:
         # No tools were used
-        return messages, is_complete
+        return messages, is_complete, final_tool_result
+
 
 def main(initial_prompt: str = "A simple greeting app that says hello in five languages"):
     """
@@ -370,53 +325,57 @@ def main(initial_prompt: str = "A simple greeting app that says hello in five la
     """
     logger.info("[Main] Initializing FSM tools...")
     client = get_sync_client()
-    processor = FSMToolProcessor()
+    fsm_manager = FSMManager(
+        client=client,
+    )
+    processor = FSMToolProcessor(fsm_api=fsm_manager)
     logger.info("[Main] FSM tools initialized successfully")
 
     # Create the initial prompt for the AI agent
-
     logger.info("[Main] Sending request to Claude...")
     current_messages = [{
         "role": "user",
         "content": f"""You are a software engineering expert who can generate application code using a code generation framework. This framework uses a Finite State Machine (FSM) to guide the generation process.
 
-Your task is to control the FSM through the generation process for this application:
-
+Here is the description of the application you need to generate:
 <app_description>
 {initial_prompt}
 </app_description>
 
-To do this, you should:
-1. First, start a new FSM session using the start_fsm tool
-2. Review each output at every stage
-3. Either:
-   - Confirm the output if it looks good (using confirm_state)
-   - OR provide feedback to improve it (using provide_feedback)
-4. Once complete, use complete_fsm to get all artifacts
+Your task is to control the FSM through the following stages of code generation:
+1. TypeSpec schema (API specification)
+2. Drizzle schema (database models)
+3. TypeScript types and interfaces
+4. Handler test files
+5. Handler implementation files
 
-The FSM generates these components in sequence:
-- TypeSpec schema (API specification)
-- Drizzle schema (database models)
-- TypeScript types and interfaces
-- Handler test files
-- Handler implementation files
+To successfully complete this task, follow these steps:
 
-Be thoughtful in your reviews. Look for:
-- Does the code correctly implement the app requirements?
+1. Start a new FSM session using the start_fsm tool.
+2. For each component generated by the FSM:
+   a. Carefully review the output.
+   b. Decide whether to confirm the output or provide feedback for improvement.
+   c. Use the appropriate tool (confirm_state or provide_feedback) based on your decision.
+3. Repeat step 2 until all components have been generated and confirmed.
+4. Use the complete_fsm tool to finalize the process and retrieve all artifacts.
+
+During your review process, consider the following questions:
+- Does the code correctly implement the application requirements?
 - Are there any errors or inconsistencies?
 - Could anything be improved or clarified?
 - Does it match other requirements mentioned in the dialogue?
 
-Provide specific, actionable feedback when requesting revisions.
+When providing feedback, be specific and actionable. If you're unsure about any aspect, ask for clarification before proceeding.
 
-When in doubt, you show ask for clarification or more information and later continue guiding the FSM based on the new information.
+Do not consider the work complete until all five components (TypeSpec schema, Drizzle schema, TypeScript types and interfaces, handler test files, and handler implementation files) have been generated and the complete_fsm tool has been called.
         """
     }]
     is_complete = False
+    final_tool_result = None
 
     # Main interaction loop
     while not is_complete:
-        current_messages, is_complete = run_with_claude(
+        current_messages, is_complete, final_tool_result = run_with_claude(
             processor,
             client,
             current_messages
@@ -424,10 +383,13 @@ When in doubt, you show ask for clarification or more information and later cont
 
         # breaking for test purposes
         if len(current_messages) < 3 and "typespec_review" in current_messages[-1]["content"]:
-            current_messages[-1]["content"] += "<errors>Too many handlers , one should be removed</errors>"
+            current_messages[-1]["content"] += "<errors>Too many handlers, one should be removed</errors>"
 
         logger.info(f"[Main] Iteration completed: {len(current_messages) - 1}")
 
+    app_out = final_tool_result.data["application_out"]
+    interpolator = Interpolator()
+    interpolator.bake(app_out, "/tmp/output_dir")
     logger.info("[Main] FSM interaction completed successfully")
 
 if __name__ == "__main__":

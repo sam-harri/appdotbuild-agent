@@ -1,11 +1,13 @@
 import os
 import uuid
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Protocol
 from dataclasses import asdict
 from langfuse import Langfuse
 from compiler.core import Compiler
-from fsm_core.llm_common import get_sync_client
+from fsm_core.llm_common import LLMClient, get_sync_client
+
+import socket
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -16,13 +18,27 @@ from statemachine import StateMachine
 
 
 class FSMManager:
-    """Manager for a single FSM instance with state handling"""
+    """Manager for an FSM instance with complete state handling and lifecycle management"""
 
-    def __init__(self):
-        """Initialize an empty FSM manager"""
+    def __init__(self, client: LLMClient | None = None, compiler: Compiler | None = None, langfuse_client: Langfuse = None):
+        """
+        Initialize the FSM manager with optional dependencies
+
+        Args:
+            client: AnthropicClient instance (created if not provided)
+            compiler: Compiler instance (created if not provided)
+            langfuse_client: Langfuse client (created if not provided)
+        """
+        self.client: LLMClient = client or get_sync_client()
+        self.compiler: Compiler = compiler or Compiler("botbuild/tsp_compiler", "botbuild/app_schema")
+        self.langfuse_client: Langfuse = langfuse_client or Langfuse()
         self.fsm_instance = None
         self.trace_id = None
         self.app_instance = None
+
+    def _get_current_state(self) -> FsmState:
+        return self.app_instance.get_effective_state(self.fsm_instance)
+
 
     def start_fsm(self, user_input: str) -> Dict[str, Any]:
         """
@@ -36,26 +52,21 @@ class FSMManager:
         """
         logger.info(f"Starting new FSM session with user input: {user_input[:100]}...")
 
-        # Initialize clients and services
-        langfuse_client = Langfuse()
+        # Create trace
         self.trace_id = uuid.uuid4().hex
-        trace = langfuse_client.trace(
+        trace = self.langfuse_client.trace(
             id=self.trace_id,
             name="agent_controlled_fsm",
-            user_id=os.environ.get("USER_ID", "agent_user"),
+            user_id=os.environ.get("USER_ID", socket.gethostname()),
             metadata={"agent_controlled": True},
         )
         logger.debug(f"Created Langfuse trace with ID: {self.trace_id}")
 
-        aws_client = get_sync_client()
-        compiler = Compiler("botbuild/tsp_compiler", "botbuild/app_schema")
-        logger.debug("Initialized AWS client and compiler")
-
         # Create application with interactive mode enabled
         self.app_instance = Application(
-            client=aws_client,
-            compiler=compiler,
-            langfuse_client=langfuse_client,
+            client=self.client,
+            compiler=self.compiler,
+            langfuse_client=self.langfuse_client,
             interaction_mode=InteractionMode.INTERACTIVE
         )
         logger.debug("Created Application instance with interaction_mode=INTERACTIVE")
@@ -67,7 +78,7 @@ class FSMManager:
 
         logger.debug("Creating FSM states...")
         fsm_states = self.app_instance.make_fsm_states(trace_id=trace.id, observation_id=trace.id)
-        logger.debug(f"Created {len(fsm_states)} FSM states")
+        logger.debug(f"Created FSM states")
 
         logger.debug("Initializing StateMachine...")
         self.fsm_instance = StateMachine[application.FSMContext](fsm_states, fsm_context)
@@ -78,11 +89,11 @@ class FSMManager:
             self.fsm_instance.send(FsmEvent(type_="PROMPT"))
             logger.info("FSM session started")
         except Exception as e:
-            logger.error(f"Error during FSM event processing: {str(e)}")
+            logger.exception(f"Error during FSM event processing: {str(e)}")
             return {"error": f"FSM initialization failed: {str(e)}"}
 
         # Check if FSM entered FAILURE state immediately
-        current_state = self.fsm_instance.stack_path[-1]
+        current_state = self._get_current_state()
         if current_state == FsmState.FAILURE:
             error_msg = self.fsm_instance.context.get("error", "Unknown error")
             logger.error(f"FSM entered FAILURE state during initialization: {error_msg}")
@@ -114,7 +125,7 @@ class FSMManager:
             return {"error": "No active FSM session"}
 
         # Log the current state before confirmation
-        previous_state = self.fsm_instance.stack_path[-1]
+        previous_state = self._get_current_state()
         logger.info(f"Current state before confirmation: {previous_state}")
 
         # Confirm the current state
@@ -122,11 +133,11 @@ class FSMManager:
         try:
             self.fsm_instance.send(FsmEvent(type_="CONFIRM"))
         except Exception as e:
-            logger.error(f"Error during FSM confirm event processing: {str(e)}")
+            logger.exception(f"Error during FSM confirm event processing")
             return {"error": f"FSM confirmation failed: {str(e)}"}
 
         # Prepare response
-        current_state = self.fsm_instance.stack_path[-1]
+        current_state = self._get_current_state()
         logger.info(f"State after confirmation: {current_state}")
 
         # Check if FSM entered FAILURE state
@@ -164,7 +175,7 @@ class FSMManager:
             return {"error": "No active FSM session"}
 
         # Determine current state and event type
-        current_state = self.fsm_instance.stack_path[-1]
+        current_state = self._get_current_state()
         event_type = self._get_revision_event_type(current_state)
         logger.info(f"Current state: {current_state}, Revision event type: {event_type}")
 
@@ -192,11 +203,11 @@ class FSMManager:
 
             logger.info("Feedback successfully sent to FSM")
         except Exception as e:
-            logger.error(f"Error while sending feedback: {str(e)}")
+            logger.exception(f"Error while sending feedback")
             return {"error": f"Error while processing feedback: {str(e)}"}
 
         # Prepare response
-        new_state = self.fsm_instance.stack_path[-1]
+        new_state = self._get_current_state()
         logger.info(f"State after feedback: {new_state}")
 
         # Check if we entered FAILURE state which requires special handling
@@ -236,13 +247,11 @@ class FSMManager:
             logger.error("No active FSM session")
             return {"error": "No active FSM session"}
 
-        # Check if FSM is in COMPLETE or FAILURE state
-        current_state = self.fsm_instance.stack_path[-1]
-        logger.info(f"Current state for completion: {current_state}")
-
-        if current_state not in [FsmState.COMPLETE, FsmState.FAILURE]:
-            logger.error(f"FSM is not in a completion state. Current state: {current_state}")
-            return {"error": f"FSM is not complete. Current state: {current_state}"}
+        current_state = self._get_current_state()
+        if "review" in current_state:
+            # send a single confirm event to move to next state
+            self.fsm_instance.send(FsmEvent(type_="CONFIRM"))
+            current_state = self._get_current_state()
 
         # Check if FSM completed but with empty outputs (likely a silent failure)
         context = self.fsm_instance.context
@@ -263,90 +272,7 @@ class FSMManager:
                 case FsmState.COMPLETE:
                     # Include all artifacts
                     logger.info("FSM completed successfully, gathering artifacts")
-
-                    if "typespec_schema" in context:
-                        logger.debug("Adding TypeSpec schema to results")
-                        result["typespec"] = {
-                            "reasoning": context["typespec_schema"].reasoning,
-                            "typespec": context["typespec_schema"].typespec,
-                            "llm_functions": context["typespec_schema"].llm_functions
-                        }
-
-                    if "drizzle_schema" in context:
-                        logger.debug("Adding Drizzle schema to results")
-                        result["drizzle"] = {
-                            "reasoning": context["drizzle_schema"].reasoning,
-                            "drizzle_schema": context["drizzle_schema"].drizzle_schema
-                        }
-
-                    if "typescript_schema" in context:
-                        logger.debug("Adding TypeScript schema to results")
-                        try:
-                            # Check if functions is a valid attribute and iterable
-                            if not hasattr(context["typescript_schema"], "functions"):
-                                logger.error("typescript_schema has no 'functions' attribute")
-                                result["typescript"] = {
-                                    "reasoning": context["typescript_schema"].reasoning,
-                                    "typescript_schema": context["typescript_schema"].typescript_schema,
-                                    "functions_error": "typescript_schema object has no 'functions' attribute"
-                                }
-                            elif context["typescript_schema"].functions is None:
-                                logger.error("typescript_schema.functions is None")
-                                result["typescript"] = {
-                                    "reasoning": context["typescript_schema"].reasoning,
-                                    "typescript_schema": context["typescript_schema"].typescript_schema,
-                                    "functions_error": "typescript_schema.functions is None"
-                                }
-                            else:
-                                # Debug the functions structure
-                                functions = context["typescript_schema"].functions
-                                logger.debug(f"Functions type: {type(functions)}")
-                                logger.debug(f"Functions content: {functions}")
-
-                                # Process the functions safely
-                                processed_functions = []
-                                for i, f in enumerate(functions):
-                                    logger.debug(f"Processing function {i}: {type(f)}")
-                                    try:
-                                        processed_functions.append(asdict(f))
-                                    except Exception as e:
-                                        logger.error(f"Error converting function {i} to dict: {str(e)}")
-                                        # Add as much info as we can extract
-                                        func_info = {"error": str(e)}
-                                        for attr in ["name", "argument_type", "argument_schema", "return_type"]:
-                                            if hasattr(f, attr):
-                                                func_info[attr] = getattr(f, attr)
-                                        processed_functions.append(func_info)
-
-                                result["typescript"] = {
-                                    "reasoning": context["typescript_schema"].reasoning,
-                                    "typescript_schema": context["typescript_schema"].typescript_schema,
-                                    "functions": processed_functions
-                                }
-                                logger.debug(f"Successfully processed {len(processed_functions)} TypeScript functions")
-                        except Exception as e:
-                            logger.error(f"Error processing TypeScript functions: {str(e)}")
-                            result["typescript"] = {
-                                "reasoning": context["typescript_schema"].reasoning,
-                                "typescript_schema": context["typescript_schema"].typescript_schema,
-                                "functions_error": f"Error processing functions: {str(e)}"
-                            }
-
-                    if "handler_tests" in context:
-                        logger.debug("Adding handler tests to results")
-                        result["handler_tests"] = {
-                            name: {"source": test.source}
-                            for name, test in context["handler_tests"].items()
-                        }
-                        logger.debug(f"Added {len(context['handler_tests'])} handler tests")
-
-                    if "handlers" in context:
-                        logger.debug("Adding handlers to results")
-                        result["handlers"] = {
-                            name: {"source": handler.source}
-                            for name, handler in context["handlers"].items()
-                        }
-                        logger.debug(f"Added {len(context['handlers'])} handlers")
+                    result = self._collect_artifacts(context)
 
                 case FsmState.FAILURE:
                     # Include error information
@@ -358,14 +284,8 @@ class FSMManager:
                     if "last_transition" in context:
                         result["last_transition"] = context["last_transition"]
         except Exception as e:
-            logger.error(f"Error collecting outputs: {str(e)}")
+            logger.exception(f"Error collecting outputs: {str(e)}")
             result["extraction_error"] = str(e)
-
-        # Reset state
-        logger.info("Resetting FSM session")
-        self.fsm_instance = None
-        self.trace_id = None
-        self.app_instance = None
 
         status = "complete" if current_state == FsmState.COMPLETE else "failed"
         logger.info(f"FSM completed with status: {status}")
@@ -380,6 +300,95 @@ class FSMManager:
         return self.fsm_instance is not None
 
     # Helper methods
+
+    def _collect_artifacts(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Collect artifacts from FSM context"""
+        result = {}
+
+        if "typespec_schema" in context:
+            logger.debug("Adding TypeSpec schema to results")
+            result["typespec"] = {
+                "reasoning": context["typespec_schema"].reasoning,
+                "typespec": context["typespec_schema"].typespec,
+                "llm_functions": context["typespec_schema"].llm_functions
+            }
+
+        if "drizzle_schema" in context:
+            logger.debug("Adding Drizzle schema to results")
+            result["drizzle"] = {
+                "reasoning": context["drizzle_schema"].reasoning,
+                "drizzle_schema": context["drizzle_schema"].drizzle_schema
+            }
+
+        if "typescript_schema" in context:
+            logger.debug("Adding TypeScript schema to results")
+            try:
+                # Check if functions is a valid attribute and iterable
+                if not hasattr(context["typescript_schema"], "functions"):
+                    logger.error("typescript_schema has no 'functions' attribute")
+                    result["typescript"] = {
+                        "reasoning": context["typescript_schema"].reasoning,
+                        "typescript_schema": context["typescript_schema"].typescript_schema,
+                        "functions_error": "typescript_schema object has no 'functions' attribute"
+                    }
+                elif context["typescript_schema"].functions is None:
+                    logger.error("typescript_schema.functions is None")
+                    result["typescript"] = {
+                        "reasoning": context["typescript_schema"].reasoning,
+                        "typescript_schema": context["typescript_schema"].typescript_schema,
+                        "functions_error": "typescript_schema.functions is None"
+                    }
+                else:
+                    # Debug the functions structure
+                    functions = context["typescript_schema"].functions
+                    logger.debug(f"Functions type: {type(functions)}")
+
+                    # Process the functions safely
+                    processed_functions = []
+                    for i, f in enumerate(functions):
+                        logger.debug(f"Processing function {i}: {type(f)}")
+                        try:
+                            processed_functions.append(asdict(f))
+                        except Exception as e:
+                            logger.error(f"Error converting function {i} to dict: {str(e)}")
+                            # Add as much info as we can extract
+                            func_info = {"error": str(e)}
+                            for attr in ["name", "argument_type", "argument_schema", "return_type"]:
+                                if hasattr(f, attr):
+                                    func_info[attr] = getattr(f, attr)
+                            processed_functions.append(func_info)
+
+                    result["typescript"] = {
+                        "reasoning": context["typescript_schema"].reasoning,
+                        "typescript_schema": context["typescript_schema"].typescript_schema,
+                        "functions": processed_functions
+                    }
+                    logger.debug(f"Successfully processed {len(processed_functions)} TypeScript functions")
+            except Exception as e:
+                logger.exception(f"Error processing TypeScript functions: {str(e)}")
+                result["typescript"] = {
+                    "reasoning": context["typescript_schema"].reasoning,
+                    "typescript_schema": context["typescript_schema"].typescript_schema,
+                    "functions_error": f"Error processing functions: {str(e)}"
+                }
+
+        if "handler_tests" in context:
+            logger.debug("Adding handler tests to results")
+            result["handler_tests"] = {
+                name: {"source": test.source}
+                for name, test in context["handler_tests"].items()
+            }
+            logger.debug(f"Added {len(context['handler_tests'])} handler tests")
+
+        if "handlers" in context:
+            logger.debug("Adding handlers to results")
+            result["handlers"] = {
+                name: {"source": handler.source}
+                for name, handler in context["handlers"].items()
+            }
+            logger.debug(f"Added {len(context['handlers'])} handlers")
+
+        return result
 
     def _get_revision_event_type(self, state: str) -> Optional[str]:
         """Map review state to corresponding revision event type"""
@@ -400,7 +409,7 @@ class FSMManager:
 
     def _get_available_actions(self) -> Dict[str, str]:
         """Get available actions for current state"""
-        current_state = self.fsm_instance.stack_path[-1]
+        current_state = self._get_current_state()
         logger.debug(f"Getting available actions for state: {current_state}")
 
         actions = {}
@@ -475,7 +484,6 @@ class FSMManager:
                                 # Debug the functions structure
                                 functions = context["typescript_schema"].functions
                                 logger.debug(f"Functions type: {type(functions)}")
-                                logger.debug(f"Functions content: {functions}")
 
                                 # Process the functions safely
                                 processed_functions = []
@@ -500,7 +508,7 @@ class FSMManager:
                                 logger.debug(f"Successfully processed {len(processed_functions)} TypeScript functions")
                                 return result
                         except Exception as e:
-                            logger.error(f"Error processing TypeScript functions: {str(e)}")
+                            logger.exception(f"Error processing TypeScript functions: {str(e)}")
                             return {
                                 "typescript_schema": context["typescript_schema"].typescript_schema,
                                 "reasoning": context["typescript_schema"].reasoning,
@@ -526,7 +534,7 @@ class FSMManager:
                         logger.debug(f"Found {len(context['handlers'])} handlers in context")
                         return {
                             "handlers": {
-                                name: {"source": handler.source if hasattr(handler, "source") else str(handler)}
+                                name: {"source": handler.source}
                                 for name, handler in context["handlers"].items()
                             }
                         }
@@ -536,45 +544,7 @@ class FSMManager:
                 case FsmState.COMPLETE:
                     # Return all generated artifacts
                     logger.debug("Compiling all artifacts for COMPLETE state")
-                    result = {}
-
-                    if "typespec_schema" in context:
-                        logger.debug("Adding TypeSpec schema to complete result")
-                        result["typespec"] = {
-                            "typespec": context["typespec_schema"].typespec,
-                            "reasoning": context["typespec_schema"].reasoning
-                        }
-
-                    if "drizzle_schema" in context:
-                        logger.debug("Adding Drizzle schema to complete result")
-                        result["drizzle"] = {
-                            "drizzle_schema": context["drizzle_schema"].drizzle_schema,
-                            "reasoning": context["drizzle_schema"].reasoning
-                        }
-
-                    if "typescript_schema" in context:
-                        logger.debug("Adding TypeScript schema to complete result")
-                        result["typescript"] = {
-                            "typescript_schema": context["typescript_schema"].typescript_schema,
-                            "reasoning": context["typescript_schema"].reasoning
-                        }
-
-                    if "handler_tests" in context:
-                        logger.debug(f"Adding {len(context['handler_tests'])} handler tests to complete result")
-                        result["handler_tests"] = {
-                            name: {"source": test.source}
-                            for name, test in context["handler_tests"].items()
-                        }
-
-                    if "handlers" in context:
-                        logger.debug(f"Adding {len(context['handlers'])} handlers to complete result")
-                        result["handlers"] = {
-                            name: {"source": handler.source if hasattr(handler, "source") else str(handler)}
-                            for name, handler in context["handlers"].items()
-                        }
-
-                    logger.debug(f"Complete result contains {len(result)} artifact categories")
-                    return result
+                    return self._collect_artifacts(context)
 
                 case FsmState.FAILURE:
                     if "error" in context:
@@ -596,33 +566,8 @@ class FSMManager:
                     logger.debug(f"State {current_state} is a processing state, returning processing status")
                     return {"status": "processing"}
         except Exception as e:
-            logger.error(f"Error getting state output: {str(e)}")
+            logger.exception(f"Error getting state output: {str(e)}")
             return {"status": "error", "message": f"Error retrieving state output: {str(e)}"}
 
         logger.debug("No specific output found for current state, returning processing status")
         return {"status": "processing"}
-
-
-# Create a singleton instance for easy import
-fsm_manager = FSMManager()
-
-# Convenience functions that use the singleton
-def start_fsm(user_input: str) -> Dict[str, Any]:
-    """Start a new FSM session with the provided user input"""
-    return fsm_manager.start_fsm(user_input)
-
-def confirm_state() -> Dict[str, Any]:
-    """Confirm the current state and advance to the next state"""
-    return fsm_manager.confirm_state()
-
-def provide_feedback(feedback: str, component_name: str = None) -> Dict[str, Any]:
-    """Provide feedback for the current state"""
-    return fsm_manager.provide_feedback(feedback, component_name)
-
-def complete_fsm() -> Dict[str, Any]:
-    """Complete the FSM session and return all artifacts"""
-    return fsm_manager.complete_fsm()
-
-def is_active() -> bool:
-    """Check if there's an active FSM session"""
-    return fsm_manager.is_active()
