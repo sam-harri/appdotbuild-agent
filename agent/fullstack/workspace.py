@@ -37,6 +37,11 @@ class Workspace:
         return self
     
     @function
+    def cwd(self, path: str) -> Self:
+        self.ctr = self.ctr.with_workdir(path)
+        return self
+    
+    @function
     def rm(self, path: str) -> Self:
         protected = self.protected - self.allowed # allowed take precedence
         if any(path.startswith(p) for p in protected):
@@ -59,12 +64,13 @@ class Workspace:
             raise FileNotFoundError(f"File not found: {path}")
     
     @function
-    def write_file(self, path: str, contents: str) -> Self:
-        protected = self.protected - self.allowed # allowed take precedence
-        if self.allowed and not any(path.startswith(p) for p in self.allowed):
-            raise PermissionError(f"Attempted to write {path} which is not in allowed paths: {self.allowed}")
-        if any(path.startswith(p) for p in protected):
-            raise PermissionError(f"Attempted to write {path} which is in protected paths: {protected}")
+    def write_file(self, path: str, contents: str, force: bool = False) -> Self:
+        if not force:
+            protected = self.protected - self.allowed # allowed take precedence
+            if self.allowed and not any(path.startswith(p) for p in self.allowed):
+                raise PermissionError(f"Attempted to write {path} which is not in allowed paths: {self.allowed}")
+            if any(path.startswith(p) for p in protected):
+                raise PermissionError(f"Attempted to write {path} which is in protected paths: {protected}")
         self.ctr = self.ctr.with_new_file(path, contents)
         return self
 
@@ -82,6 +88,7 @@ class Workspace:
     
     @function
     def exec_with_pg(self, command: list[str]) -> Container:
+        pg_shim = "while ! pg_isready -h postgres -U postgres; do sleep 1; done"
         postgresdb = (
             dag.container()
             .from_("postgres:17.0-alpine")
@@ -89,6 +96,7 @@ class Workspace:
             .with_env_variable("POSTGRES_PASSWORD", "postgres")
             .with_env_variable("POSTGRES_DB", "postgres")
             .with_exposed_port(5432)
+            .with_exec(["sh", "-c", pg_shim])
             .as_service(use_entrypoint=True)
         )
 

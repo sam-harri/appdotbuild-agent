@@ -1,9 +1,35 @@
-from typing import Any, Awaitable, Callable, NotRequired, Protocol, TypedDict
+from typing import Any, Awaitable, Callable, NotRequired, Protocol, Self, TypedDict
 
 
 class Actor(Protocol):
     async def execute(self, *args, **kwargs) -> Any:
         ...
+
+    def dump(self) -> dict:
+        ...
+
+    def load(self, data: dict):
+        ...
+
+
+class Context(Protocol):
+    def dump(self) -> dict:
+        ...
+    
+    @classmethod
+    def load(cls, data: dict) -> Self:
+        ...
+
+
+class ActorCheckpoint(TypedDict):
+    path: list[str]
+    data: dict
+
+
+class Checkpoint(TypedDict):
+    stack_path: list[str]
+    context: dict
+    actors: list[ActorCheckpoint]
 
 
 class InvokeCallback[T](TypedDict):
@@ -34,8 +60,8 @@ class State[T](TypedDict):
     initial: NotRequired[str]
 
 
-class StateMachine[T]:
-    def __init__(self, root: State, context: T):
+class StateMachine[T: Context]:
+    def __init__(self, root: State[T], context: T):
         self.root = root
         self.context = context
         self.state_stack: list[State[T]] = [root]
@@ -123,3 +149,53 @@ class StateMachine[T]:
                     for action in always.get("actions", []):
                         await action(self.context)
                     return
+    
+    def dump(self) -> Checkpoint:
+        actors = []
+        stack, visited = [(self.root, [])], set()
+        while stack:
+            current, path = stack.pop()
+            if id(current) in visited:
+                continue
+            visited.add(id(current))
+            if "invoke" in current:
+                actors.append({
+                    "path": path,
+                    "data": current["invoke"]["src"].dump(),
+                })
+            if "states" not in current:
+                continue
+            for key, value in current["states"].items():
+                stack.append((value, path + [key]))
+        checkpoint: Checkpoint = {
+            "stack_path": self.stack_path,
+            "context": self.context.dump(),
+            "actors": actors,
+        }
+        return checkpoint
+    
+    @classmethod
+    def load(cls, root: State[T], data: Checkpoint, context_type: type[T]) -> Self:
+        stack, visited = [(root, [])], set()
+        while stack:
+            current, path = stack.pop()
+            if id(current) in visited:
+                continue
+            visited.add(id(current))
+            if "invoke" in current:
+                for actor in data["actors"]:
+                    if actor["path"] == path:
+                        current["invoke"]["src"].load(actor["data"])
+            if "states" not in current:
+                continue
+            for key, value in current["states"].items():
+                stack.append((value, path + [key]))
+        context = context_type.load(data["context"])
+        machine = cls(root, context)
+        for state_name in data["stack_path"]:
+            if not "states" in machine.state_stack[-1]:
+                raise RuntimeError(f"Invalid state stack: {machine.state_stack[-1]}")
+            if state_name not in machine.state_stack[-1]["states"]:
+                raise RuntimeError(f"Invalid state name: {state_name}, stack: {machine.state_stack[-1]}")
+            machine.state_stack.append(machine.state_stack[-1]["states"][state_name])
+        return machine

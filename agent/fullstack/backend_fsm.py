@@ -266,9 +266,9 @@ async def make_fsm_states(m_client: AsyncLLM, model_params: ModelParams, beam_wi
         assert "backend_files" in ctx, "backend_files must be provided"
         if "bfs_handlers" in ctx:
             return
-        handlers_workspace = workspace.clone().permissions([], [])
+        handlers_workspace = workspace.clone()
         for path, content in ctx["backend_files"].items():
-            handlers_workspace.write_file(path, content)
+            handlers_workspace.write_file(path, content, force=True)
         handlers_workspace.permissions([], ["src/tests/", "src/handlers/"])
 
         project_context = await grab_file_ctx(
@@ -293,9 +293,9 @@ async def make_fsm_states(m_client: AsyncLLM, model_params: ModelParams, beam_wi
         assert "backend_files" in ctx, "backend_files must be provided"
         if "bfs_backend_index" in ctx:
             return
-        index_workspace = workspace.clone().permissions([], [])
+        index_workspace = workspace.clone()
         for path, content in ctx["backend_files"].items():
-            index_workspace.write_file(path, content)
+            index_workspace.write_file(path, content, force=True)
         index_workspace.permissions([], ["src/index.ts"])
 
         handler_files = [f for f in ctx["backend_files"].keys() if f.startswith("src/handlers/")]

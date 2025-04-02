@@ -29,10 +29,12 @@ class Compiler:
             dag
             .container()
             .from_("oven/bun:1.2.5-alpine")
+            .with_exec(["apk", "--update", "add", "postgresql-client"])
             .with_workdir("/app")
             .with_directory("/app", dag.host().directory(os.path.join(tpl_path, "app_schema"), exclude=["node_modules"]))
             .with_exec(["bun", "install"])
         )
+        self.pg_shim = "while ! pg_isready -h postgres -U postgres; do sleep 1; done"
 
     async def compile_typespec(self, schema: str):
         container = self.tsp_image.with_new_file("schema.tsp", schema)
@@ -49,6 +51,7 @@ class Compiler:
         container = (
             self.app_image
             .with_service_binding("postgres", self.tmp_postgres())
+            .with_exec(["sh", "-c", self.pg_shim]) # postgres shim
             .with_env_variable("APP_DATABASE_URL", "postgres://postgres:postgres@postgres:5432/postgres")
             .with_new_file("src/db/schema/application.ts", schema)
         )
@@ -70,6 +73,7 @@ class Compiler:
         container = (
             self.app_image
             .with_service_binding("postgres", self.tmp_postgres())
+            .with_exec(["sh", "-c", self.pg_shim]) # postgres shim
             .with_env_variable("APP_DATABASE_URL", "postgres://postgres:postgres@postgres:5432/postgres")
         )
         for path, content in files.items():
@@ -104,7 +108,7 @@ class Compiler:
             .with_env_variable("POSTGRES_USER", "postgres")
             .with_env_variable("POSTGRES_PASSWORD", "postgres")
             .with_env_variable("POSTGRES_DB", "postgres")
-            #.with_exposed_port(5432)
+            .with_exposed_port(5432)
             .as_service(use_entrypoint=True)
         )
         return postgresdb
