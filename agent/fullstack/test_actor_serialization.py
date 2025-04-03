@@ -1,7 +1,7 @@
 import pytest
 import dagger
-from logic import Node
-from actors import BaseSearchActor, NodeData
+from base_node import Node
+from actors import BaseActor, BaseData
 from models.common import Message, TextRaw
 from workspace import Workspace
 
@@ -13,25 +13,39 @@ def anyio_backend():
     return 'asyncio'
 
 
-class SimpleActor(BaseSearchActor):
-    def __init__(self, workspace: Workspace, root: Node[NodeData] | None = None):
+class SimpleActor(BaseActor):
+    root: Node[BaseData] | None = None
+
+    def __init__(self, workspace: Workspace, root: Node[BaseData] | None = None):
         self.workspace = workspace
         self.root = root
     
     def execute(self, *args, **kwargs):
         pass
 
+    async def dump(self) -> object:
+        if self.root is None:
+            return []
+        return await self.dump_node(self.root)
+    
+    async def load(self, data: object):
+        if not isinstance(data, list):
+            raise ValueError(f"Expected list got {type(data)}")
+        if not data:
+            return
+        self.root = await self.load_node(data)
+
 
 async def test_actor_recovery():
     async with dagger.connection():
         workspace = await Workspace.create()
-        root = Node[NodeData](NodeData(
+        root = Node[BaseData](BaseData(
             workspace=workspace.clone(),
             messages=[Message(role="user", content=[TextRaw("test")])],
         ))
         workspace_child = workspace.clone()
         workspace_child.write_file("test.txt", "test")
-        child = Node[NodeData](NodeData(
+        child = Node[BaseData](BaseData(
             workspace=workspace_child,
             messages=[Message(role="assistant", content=[TextRaw("test child")])],
             files={"test.txt": "test"},

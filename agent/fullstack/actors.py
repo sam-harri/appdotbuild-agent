@@ -1,12 +1,16 @@
+from typing import Protocol
 import dataclasses
-import logic
+import anyio
+from anyio.streams.memory import MemoryObjectSendStream
 import statemachine
-from models.common import Message
+from base_node import Node
+from models.common import AsyncLLM, Message
+from models.utils import loop_completion
 from workspace import Workspace
 
 
 @dataclasses.dataclass
-class NodeData:
+class BaseData:
     workspace: Workspace
     messages: list[Message]
     files: dict[str, str] = dataclasses.field(default_factory=dict)
@@ -19,43 +23,81 @@ class NodeData:
         return self.messages[0]
 
 
-class BaseSearchActor(statemachine.Actor):
+class BaseActor(statemachine.Actor):
     workspace: Workspace
-    root: logic.Node[NodeData] | None
 
-    async def dump(self) -> object:
-        if self.root is None:
-            return []
-        stack, result = [self.root], []
+    async def dump_data(self, data: BaseData) -> object:
+        return {
+            "messages": [msg.to_dict() for msg in data.messages],
+            "files": data.files,
+        }
+    
+    async def load_data(self, data: dict, workspace: Workspace) -> BaseData:
+        for file, content in data["files"].items():
+            workspace.write_file(file, content)
+        messages = [Message.from_dict(msg) for msg in data["messages"]]
+        return BaseData(workspace, messages, data["files"])
+    
+    async def dump_node(self, node: Node[BaseData]) -> dict:
+        stack, result = [node], []
         while stack:
             node = stack.pop()
             result.append({
                 "id": node._id,
                 "parent": node.parent._id if node.parent else None,
-                "data": {
-                    "messages": [msg.to_dict() for msg in node.data.messages],
-                    "files": node.data.files,
-                },
+                "data": await self.dump_data(node.data),
             })
             stack.extend(node.children)
         return result
-
-    async def load(self, data: object):
-        if not isinstance(data, list):
-            raise ValueError(f"Expected list got {type(data)}")
-        if not data:
-            return
-        id_to_node: dict[str, logic.Node[NodeData]] = {}
+    
+    async def load_node(self, data: list[dict]) -> Node[BaseData]:
+        root = None
+        id_to_node: dict[str, Node[BaseData]] = {}
         for item in data:
             parent = id_to_node[item["parent"]] if item["parent"] else None
-            messages = [Message.from_dict(msg) for msg in item["data"]["messages"]]
-            ws = parent.data.workspace.clone() if parent else self.workspace.clone()
-            for file, content in item["data"]["files"].items():
-                ws.write_file(file, content)
-            data = NodeData(ws, messages, item["data"]["files"])
-            node = logic.Node(data, parent, item["id"])
+            workspace = parent.data.workspace if parent else self.workspace
+            data = await self.load_data(item["data"], workspace.clone())
+            node = Node(data, parent, item["id"])
             if parent:
                 parent.children.append(node)
             else:
-                self.root = node
+                root = node
             id_to_node[item["id"]] = node
+        if root is None:
+            raise ValueError("Root node not found")
+        return root
+    
+    async def dump(self) -> object:
+        ...
+    
+    async def load(self, data: object):
+        ...
+
+
+class LLMActor(Protocol):
+    llm: AsyncLLM
+
+    async def run_llm(self, nodes: list[Node[BaseData]], **kwargs) -> list[Node[BaseData]]:
+        async def node_fn(node: Node[BaseData], tx: MemoryObjectSendStream[Node[BaseData]]):
+            history = [m for n in node.get_trajectory() for m in n.data.messages]
+            new_node = Node[BaseData](
+                data=BaseData(
+                    workspace=node.data.workspace.clone(),
+                    messages=[await loop_completion(self.llm, history, **kwargs)],
+                ),
+                parent=node
+            )
+            async with tx:
+                await tx.send(new_node)
+        result = []
+        tx, rx = anyio.create_memory_object_stream[Node[BaseData]]()
+        async with anyio.create_task_group() as tg:
+            for node in nodes:
+                tg.start_soon(node_fn, node, tx.clone())
+            tx.close()
+            async with rx:
+                async for new_node in rx:
+                    new_node.parent.children.append(new_node) # pyright: ignore[reportOptionalMemberAccess]
+                    result.append(new_node)
+        return result
+        

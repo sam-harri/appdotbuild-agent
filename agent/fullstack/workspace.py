@@ -83,27 +83,36 @@ class Workspace:
         )
     
     @function
+    async def diff(self) -> str:
+        start = dag.container().from_("alpine/git").with_workdir("/app").with_directory("/app", self.start)
+        if ".git" not in self.start.entries():
+            start = start.with_exec(["git", "init"]).with_exec(["git", "add", "."]).with_exec(["git", "commit", "-m", "'initial'"])
+        return await start.with_directory(".", self.ctr.directory(".")).with_exec(["git", "diff"]).stdout()
+    
+    @function
     def exec(self, command: list[str]) -> Container:
         return self.ctr.with_exec(command, expect=ReturnType.ANY)
     
     @function
     def exec_with_pg(self, command: list[str]) -> Container:
-        pg_shim = "while ! pg_isready -h postgres -U postgres; do sleep 1; done"
+        #pg_shim = "while ! pg_isready -h postgres -U postgres; do sleep 1; done"
         postgresdb = (
             dag.container()
             .from_("postgres:17.0-alpine")
             .with_env_variable("POSTGRES_USER", "postgres")
             .with_env_variable("POSTGRES_PASSWORD", "postgres")
             .with_env_variable("POSTGRES_DB", "postgres")
-            .with_exposed_port(5432)
-            .with_exec(["sh", "-c", pg_shim])
+            #.with_exposed_port(5432)
+            #.with_exec(["sh", "-c", pg_shim])
             .as_service(use_entrypoint=True)
         )
 
         return (
             self.ctr
+            .with_exec(["apk", "--update", "add", "postgresql-client"]) # TODO: might be not needed
             .with_service_binding("postgres", postgresdb)
             .with_env_variable("DATABASE_URL", "postgres://postgres:postgres@postgres:5432/postgres")
+            .with_exec(["sh", "-c", "while ! pg_isready -h postgres -U postgres; do sleep 1; done"])
             .with_exec(command, expect=ReturnType.ANY)
         )
     

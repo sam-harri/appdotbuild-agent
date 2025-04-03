@@ -3,10 +3,10 @@ import os
 import pickle
 import dagger
 from dagger import dag
-import logic
 import statemachine
 import backend_fsm
 import frontend_fsm
+from base_node import Node
 from shared_fsm import ModelParams
 from anthropic import AsyncAnthropic
 from models.anthropic import AnthropicLLM
@@ -21,7 +21,7 @@ async def checkpoint_context(context: backend_fsm.AgentContext | frontend_fsm.Ag
             ckpt_path = os.path.join(export_dir, "checkpoint_frontend.pkl")
             files_path = os.path.join(export_dir, "client", "src")
     with open(ckpt_path, "wb") as f:
-        serializable = {k: v for k, v in context.items() if not isinstance(v, logic.Node)}
+        serializable = {k: v for k, v in context.items() if not isinstance(v, Node)}
         pickle.dump(serializable, f, pickle.HIGHEST_PROTOCOL)
     if "checkpoint" in context:
         await context["checkpoint"].data.workspace.container().directory("src").export(files_path)

@@ -155,3 +155,95 @@ function App() {
 export default App;
 </file>
 """.strip()
+
+
+BACKEND_DRAFT_PROMPT = f"""
+- Define all types using zod in a single file src/schema.ts
+- Always define schema and corresponding type using z.infer<typeof typeSchemaName>
+Example:
+{BASE_TYPESCRIPT_SCHEMA}
+
+- Define all database tables using drizzle-orm in src/db/schema.ts
+Example:
+{BASE_DRIZZLE_SCHEMA}
+
+- For each handler write its declaration in corresponding file in src/handlers/
+Example:
+{BASE_HANDLER_DECLARATION}
+
+Key project files:
+{{{{project_context}}}}
+
+Generate typescript schema, database schema and handlers declarations.
+Return code within <file path="src/handlers/handler_name.ts">...</file> tags.
+On errors, modify only relevant files and return code within <file path="src/handlers/handler_name.ts">...</file> tags.
+
+Task:
+{{{{user_prompt}}}}
+""".strip()
+
+
+BACKEND_HANDLER_PROMPT = f"""
+- Write implementation for the handler function
+- Write small but meaningful test set for the handler
+
+Example:
+{BASE_HANDLER_TEST}
+
+Key project files:
+{{{{project_context}}}}
+
+Return the handler implementation within <file path="src/handlers/{{{{handler_name}}}}.ts">...</file> tags.
+Return the test code within <file path="src/tests/{{{{handler_name}}}}.test.ts">...</file> tags.
+""".strip()
+
+
+TRPC_INDEX_SHIM = """
+...
+import { myHandlerInputSchema } from './schema';
+import { myHandler } from './handlers/my_handler';
+...
+const appRouter = router({
+  myHandler: publicProcedure
+    .input(myHandlerInputSchema)
+    .query(({ input }) => myHandler(input)),
+});
+...
+""".strip()
+
+
+BACKEND_INDEX_PROMPT = f"""
+- Generate root TRPC index file in src/index.ts
+Relevant parts to modify:
+- Imports of handlers and schema types
+- Registering TRPC routes
+{TRPC_INDEX_SHIM}
+
+- Rest should be repeated verbatim from the example
+Example:
+{BASE_SERVER_INDEX}
+
+Key project files:
+{{{{project_context}}}}
+
+Generate ONLY root TRPC index file. Return code within <file path="src/index.ts">...</file> tags.
+On errors, modify only index files and return code within <file path="src/index.ts">...</file> tags.
+""".strip()
+
+
+FRONTEND_PROMPT = f"""
+- Generate react frontend application using radix-ui components.
+- Backend communication is done via TRPC.
+
+Example:
+{BASE_APP_TSX}
+
+Key project files:
+{{{{project_context}}}}
+
+Return code within <file path="src/components/component_name.tsx">...</file> tags.
+On errors, modify only relevant files and return code within <file path="...">...</file> tags.
+
+Task:
+{{{{user_prompt}}}}
+""".strip()

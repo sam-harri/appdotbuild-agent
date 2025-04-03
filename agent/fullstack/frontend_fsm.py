@@ -1,9 +1,9 @@
 from typing import TypedDict, NotRequired
 import enum
 from dagger import dag
-import logic
 import playbooks
 import statemachine
+from base_node import Node
 from workspace import Workspace
 from models.common import AsyncLLM, Message, TextRaw, Tool, ToolUse, ToolUseResult, ContentBlock
 from shared_fsm import BFSExpandActor, ModelParams, NodeData, FileXML, grab_file_ctx, set_error, print_error
@@ -13,8 +13,8 @@ class AgentContext(TypedDict):
     user_prompt: str
     backend_files: dict[str, str]
     frontend_files: dict[str, str]
-    bfs_frontend: NotRequired[logic.Node[NodeData]]
-    checkpoint: NotRequired[logic.Node[NodeData]]
+    bfs_frontend: NotRequired[Node[NodeData]]
+    checkpoint: NotRequired[Node[NodeData]]
     error: NotRequired[Exception]
 
 
@@ -33,7 +33,7 @@ class FSMState(str, enum.Enum):
 
 async def eval_frontend(ctx: AgentContext) -> bool:
     assert "bfs_frontend" in ctx, "bfs_frontend must be provided"
-    solution: logic.Node[NodeData] | None = None
+    solution: Node[NodeData] | None = None
     children = [n for n in ctx["bfs_frontend"].get_all_children() if n.is_leaf]
     for n in children:
         content: list[ContentBlock] = []
@@ -144,7 +144,7 @@ async def make_fsm_states(m_client: AsyncLLM, model_params: ModelParams, beam_wi
                 }
             )]
         )
-        ctx["bfs_frontend"] = logic.Node(NodeData(frontend_workspace, [message]))
+        ctx["bfs_frontend"] = Node(NodeData(frontend_workspace, [message]))
 
     m_states: statemachine.State[AgentContext] = {
         "on": {

@@ -2,9 +2,9 @@ from typing import TypedDict, NotRequired
 import os
 import enum
 from dagger import dag
-import logic
 import playbooks
 import statemachine
+from base_node import Node
 from workspace import Workspace
 from models.common import AsyncLLM, Message, TextRaw, ContentBlock
 from shared_fsm import BFSExpandActor, NodeData, FileXML, ModelParams, grab_file_ctx, set_error, print_error
@@ -14,17 +14,17 @@ class AgentContext(TypedDict):
     user_prompt: str
     backend_files: NotRequired[dict[str, str]]
     frontend_files: NotRequired[dict[str, str]]
-    bfs_definitions: NotRequired[logic.Node[NodeData]]
-    bfs_handlers: NotRequired[logic.Node[NodeData]]
-    bfs_backend_index: NotRequired[logic.Node[NodeData]]
-    bfs_frontend: NotRequired[logic.Node[NodeData]]
-    checkpoint: NotRequired[logic.Node[NodeData]]
+    bfs_definitions: NotRequired[Node[NodeData]]
+    bfs_handlers: NotRequired[Node[NodeData]]
+    bfs_backend_index: NotRequired[Node[NodeData]]
+    bfs_frontend: NotRequired[Node[NodeData]]
+    checkpoint: NotRequired[Node[NodeData]]
     error: NotRequired[Exception]
 
 
 async def eval_backend(ctx: AgentContext) -> bool:
     assert "bfs_definitions" in ctx, "bfs_definitions must be provided"
-    solution: logic.Node[NodeData] | None = None
+    solution: Node[NodeData] | None = None
     children = [n for n in ctx["bfs_definitions"].get_all_children() if n.is_leaf]
     for n in children:
         content: list[ContentBlock] = []
@@ -65,7 +65,7 @@ async def eval_backend_handlers(ctx: AgentContext) -> bool:
         name, _ = os.path.splitext(os.path.basename(n))
         expect_files.append(f"src/tests/{name}.test.ts")
 
-    solution: logic.Node[NodeData] | None = None
+    solution: Node[NodeData] | None = None
     children = [n for n in ctx["bfs_handlers"].get_all_children() if n.is_leaf]
     for n in children:
         content: list[ContentBlock] = []
@@ -104,7 +104,7 @@ async def eval_backend_index(ctx: AgentContext) -> bool:
     assert "bfs_backend_index" in ctx, "bfs_backend_index must be provided"
     assert "backend_files" in ctx, "backend_files must be provided"
 
-    solution: logic.Node[NodeData] | None = None
+    solution: Node[NodeData] | None = None
     children = [n for n in ctx["bfs_backend_index"].get_all_children() if n.is_leaf]
     for n in children:
         content: list[ContentBlock] = []
@@ -260,7 +260,7 @@ async def make_fsm_states(m_client: AsyncLLM, model_params: ModelParams, beam_wi
                 }
             )]
         )
-        ctx["bfs_definitions"] = logic.Node(NodeData(draft_workspace, [message]))
+        ctx["bfs_definitions"] = Node(NodeData(draft_workspace, [message]))
     
     async def root_entry_handlers_fn(ctx: AgentContext):
         assert "backend_files" in ctx, "backend_files must be provided"
@@ -287,7 +287,7 @@ async def make_fsm_states(m_client: AsyncLLM, model_params: ModelParams, beam_wi
                 }
             )]
         )
-        ctx["bfs_handlers"] = logic.Node(NodeData(handlers_workspace, [message]))
+        ctx["bfs_handlers"] = Node(NodeData(handlers_workspace, [message]))
     
     async def root_entry_backend_index(ctx: AgentContext):
         assert "backend_files" in ctx, "backend_files must be provided"
@@ -315,7 +315,7 @@ async def make_fsm_states(m_client: AsyncLLM, model_params: ModelParams, beam_wi
                 }
             )]
         )
-        ctx["bfs_backend_index"] = logic.Node(NodeData(index_workspace, [message]))
+        ctx["bfs_backend_index"] = Node(NodeData(index_workspace, [message]))
 
     m_states: statemachine.State[AgentContext] = {
         "on": {

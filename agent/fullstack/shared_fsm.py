@@ -3,7 +3,7 @@ import dataclasses
 import re
 import anyio
 from anyio.streams.memory import MemoryObjectSendStream
-import logic
+from base_node import Node
 from workspace import Workspace
 from models.common import AsyncLLM, Message, Tool, TextRaw, ToolUse, ThinkingBlock
 
@@ -51,10 +51,10 @@ class BFSExpandActor:
         self.model_params = model_params
         self.beam_width = beam_width
     
-    async def execute(self, root: logic.Node[NodeData]) -> logic.Node[NodeData]:
-        async def task_fn(node: logic.Node[NodeData], tx: MemoryObjectSendStream[logic.Node[NodeData]]):
+    async def execute(self, root: Node[NodeData]) -> Node[NodeData]:
+        async def task_fn(node: Node[NodeData], tx: MemoryObjectSendStream[Node[NodeData]]):
             history = [m for n in node.get_trajectory() for m in n.data.messages]
-            new_node = logic.Node[NodeData](
+            new_node = Node[NodeData](
                 data=NodeData(
                     workspace=node.data.workspace.clone(),
                     messages=[await self.completion(history)],
@@ -66,7 +66,7 @@ class BFSExpandActor:
                 await tx.send(new_node)
         
         candidates = [root] * self.beam_width if root.is_leaf else [n for n in root.get_all_children() if n.is_leaf]
-        tx, rx = anyio.create_memory_object_stream[logic.Node[NodeData]]()
+        tx, rx = anyio.create_memory_object_stream[Node[NodeData]]()
         async with anyio.create_task_group() as tg:
             for n in candidates:
                 tg.start_soon(task_fn, n, tx.clone())

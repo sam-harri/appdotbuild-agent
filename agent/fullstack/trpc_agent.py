@@ -1,0 +1,406 @@
+from typing import Literal, Protocol, Self, TypedDict, NotRequired
+import os
+import re
+import enum
+import dataclasses
+import anyio
+from anyio.streams.memory import MemoryObjectSendStream
+import jinja2
+import dagger
+import playbooks
+import statemachine
+from base_node import Node
+from workspace import Workspace
+from actors import BaseData, BaseActor, LLMActor
+from models.common import AsyncLLM, Message, TextRaw, Tool, ToolUse, ToolUseResult
+#from ..api.agent_server.models import AgentSseEvent
+
+
+class FSMState(str, enum.Enum):
+    DRAFT_GEN = "generating_draft"
+    HANDLERS = "generating_handlers"
+    INDEX = "generating_index"
+    FRONTEND = "generating_frontend"
+    IDLE = "idle"
+
+
+class FSMEvent(str, enum.Enum):
+    MESSAGE = "message"
+
+
+@dataclasses.dataclass
+class Command:
+    kind: Literal["create", "confirm", "edit"]
+    prompt: str
+    run_queue: list[FSMState]
+
+
+@dataclasses.dataclass
+class Context:
+    history: list[Message]
+    command: Command
+    files: dict[str, str]
+    error: Exception | None
+    #event_tx: MemoryObjectSendStream[AgentSseEvent] | None
+
+
+@dataclasses.dataclass
+class ExecResult:
+    exit_code: int
+    stdout: str
+    stderr: str
+
+    @classmethod
+    async def from_dagger(cls, ctr: dagger.Container) -> Self:
+        return cls(
+            exit_code=await ctr.exit_code(),
+            stdout=await ctr.stdout(),
+            stderr=await ctr.stderr(),
+        )
+
+
+async def run_write_files(node: Node[BaseData]) -> TextRaw | None:
+    pattern = re.compile(
+        r'<file path="(?P<path>[^"]+)">(?P<content>.*?)</file>',
+        re.DOTALL
+    )
+
+    def parse_files(content: str) -> dict[str, str]:
+        matches = pattern.finditer(content)
+        return {match.group("path"): match.group("content") for match in matches}
+    
+    errors = []
+    for block in node.data.head().content:
+        if not (isinstance(block, TextRaw)):
+            continue
+        for file, content in parse_files(block.text).items():
+            try:
+                node.data.workspace.write_file(file, content)
+                node.data.files.update({file: content})
+            except PermissionError as e:
+                errors.append(str(e))
+    return TextRaw("\n".join(errors)) if errors else None
+
+
+async def run_tsc_compile(node: Node[BaseData]) -> tuple[ExecResult, TextRaw | None]:
+    container = node.data.workspace.exec(["bun", "run", "tsc", "--noEmit"])
+    result = await ExecResult.from_dagger(container)
+    if result.exit_code == 0:
+        return result, None
+    return result, TextRaw(f"Error running tsc: {result.stdout}")
+
+
+async def run_drizzle(node: Node[BaseData]) -> tuple[ExecResult, TextRaw | None]:
+    container = node.data.workspace.exec_with_pg(["bun", "run", "drizzle-kit", "push", "--force"])
+    result = await ExecResult.from_dagger(container)
+    if result.exit_code == 0 and not result.stderr:
+        return result, None
+    return result, TextRaw(f"Error running drizzle: {result.stderr}")
+
+
+async def run_tests(node: Node[BaseData]) -> tuple[ExecResult, TextRaw | None]:
+    container = node.data.workspace.exec_with_pg(["bun", "test"])
+    result = await ExecResult.from_dagger(container)
+    if result.exit_code == 0:
+        return result, None
+    return result, TextRaw(f"Error running tests: {result.stderr}")
+
+
+async def run_front_check(node: Node[BaseData]) -> tuple[ExecResult, TextRaw | None]:
+    container = node.data.workspace.exec(["bun", "run", "tsc", "-p", "tsconfig.app.json", "--noEmit"])
+    result = await ExecResult.from_dagger(container)
+    if result.exit_code == 0:
+        return result, None
+    return result, TextRaw(f"Error running tsc: {result.stdout}")
+
+
+async def run_tools(node: Node[BaseData]) -> list[ToolUseResult]:
+    result = []
+    for block in node.data.head().content:
+        if not isinstance(block, ToolUse):
+            continue
+        match block.name:
+            case "read_file":
+                try:
+                    tool_content = await node.data.workspace.read_file(block.input["path"]) # pyright: ignore[reportIndexIssue]
+                    result.append(ToolUseResult.from_tool_use(block, tool_content))
+                except FileNotFoundError as e:
+                    result.append(ToolUseResult.from_tool_use(block, str(e), is_error=True))
+            case unknown:
+                result.append(ToolUseResult.from_tool_use(block, f"Unknown tool: {unknown}", is_error=True))
+    return result
+
+
+class ModelParams(TypedDict):
+    model: str
+    max_tokens: int
+    tools: NotRequired[list[Tool]]
+
+
+class BaseTRPCActor(BaseActor, LLMActor):
+    model_params: ModelParams
+
+    def __init__(self, llm: AsyncLLM, workspace: Workspace, model_params: ModelParams, beam_width: int = 5, max_depth: int = 5):
+        self.llm = llm
+        self.workspace = workspace
+        self.model_params = model_params
+        self.beam_width = beam_width
+        self.max_depth = max_depth
+    
+    async def search(self, node: Node[BaseData]) -> Node[BaseData] | None:
+        solution: Node[BaseData] | None = None
+        while solution is None:
+            candidates = self.select(node)
+            if not candidates:
+                break
+            nodes = await self.run_llm(candidates, **self.model_params)
+            for new_node in nodes:
+                if await self.eval_node(new_node):
+                    solution = new_node
+        return solution
+    
+    def select(self, node: Node[BaseData]) -> list[Node[BaseData]]:
+        if node.is_leaf:
+            return [node] * self.beam_width
+        return [n for n in node.get_all_children() if n.is_leaf and n.depth <= self.max_depth]
+    
+    async def eval_node(self, node: Node[BaseData]) -> bool:
+        ...
+
+
+class DraftActor(BaseTRPCActor):
+    root: Node[BaseData] | None = None
+
+    def __init__(self, llm: AsyncLLM, workspace: Workspace, model_params: ModelParams, beam_width: int = 1, max_depth: int = 5):
+        super().__init__(llm, workspace, model_params, beam_width=beam_width, max_depth=max_depth)
+        self.root = None
+
+    async def execute(self, user_prompt: str) -> Node[BaseData]:
+        await self.cmd_create(user_prompt)
+        solution = await self.search(self.root)
+        if solution is None:
+            raise ValueError("No solution found")
+        return solution
+
+    async def cmd_create(self, user_prompt: str):
+        workspace = self.workspace.clone().permissions(allowed=self.files_allowed)
+        context = []
+        for path in self.files_relevant:
+            content = await workspace.read_file(path)
+            context.append(f"\n<file path=\"{path}\">\n{content.strip()}\n</file>\n")
+        context.extend([
+            "DATABASE_URL=postgres://postgres:postgres@postgres:5432/postgres",
+            f"Allowed paths and directories: {self.files_allowed}",
+        ])
+        jinja_env = jinja2.Environment()
+        prompt_template = jinja_env.from_string(playbooks.BACKEND_DRAFT_PROMPT)
+        prompt = prompt_template.render(
+            project_context="\n".join(context),
+            user_prompt=user_prompt,
+        )
+        message = Message(role="user", content=[TextRaw(prompt)])
+        self.root = Node(BaseData(workspace, [message], {}))
+    
+    async def eval_node(self, node: Node[BaseData]) -> bool:
+        files_err = await run_write_files(node)
+        if files_err:
+            node.data.messages.append(Message(role="user", content=[files_err]))
+            return False
+        _, tsc_err = await run_tsc_compile(node)
+        if tsc_err:
+            node.data.messages.append(Message(role="user", content=[tsc_err]))
+            return False
+        _, drizzle_err = await run_drizzle(node)
+        if drizzle_err:
+            node.data.messages.append(Message(role="user", content=[drizzle_err]))
+            return False
+        return True
+    
+    @property
+    def files_relevant(self) -> list[str]:
+        return ["src/db/index.ts", "package.json"]
+    
+    @property
+    def files_allowed(self) -> list[str]:
+        return ["src/schema.ts", "src/db/schema.ts", "src/handlers/"]
+    
+    async def dump(self) -> object:
+        if self.root is None:
+            return []
+        return await self.dump_node(self.root)
+    
+    async def load(self, data: object):
+        if not isinstance(data, list):
+            raise ValueError(f"Expected list got {type(data)}")
+        if not data:
+            return
+        self.root = await self.load_node(data)
+
+
+class HandlersActor(BaseTRPCActor):
+    handlers: dict[str, Node[BaseData]]
+
+    def __init__(self, llm: AsyncLLM, workspace: Workspace, model_params: ModelParams, beam_width: int = 1, max_depth: int = 5):
+        super().__init__(llm, workspace, model_params, beam_width=beam_width, max_depth=max_depth)
+        self.handlers = {}
+    
+    async def execute(self, files: dict[str, str]) -> dict[str, Node[BaseData]]:
+        async def task_fn(node: Node[BaseData], key: str, tx: MemoryObjectSendStream[tuple[str, Node[BaseData] | None]]):
+            async with tx:
+                await tx.send((key, await self.search(node)))
+        
+        await self.cmd_create(files)
+        solution: dict[str, Node[BaseData]] = {}
+        tx, rx = anyio.create_memory_object_stream[tuple[str, Node[BaseData] | None]]()
+        async with anyio.create_task_group() as tg:
+            for name, node in self.handlers.items():
+                tg.start_soon(task_fn, node, name, tx.clone())
+            tx.close()
+            async with rx:
+                async for (key, node) in rx:
+                    solution[key] = node # TODO: notify about progress
+        if not solution:
+            raise ValueError("No solution found")
+        return solution
+    
+    async def cmd_create(self, files: dict[str, str]):
+        self.handlers = {}
+        workspace = self.workspace.clone()
+        for file in self.files_inherit:
+            workspace.write_file(file, files[file])
+        jinja_env = jinja2.Environment()
+        prompt_template = jinja_env.from_string(playbooks.BACKEND_HANDLER_PROMPT)
+        for file, content in files.items():
+            if not file.startswith("src/handlers/") or not file.endswith(".ts"):
+                continue
+            handler_name, _ = os.path.splitext(os.path.basename(file))
+            allowed = [file, f"src/tests/{handler_name}.test.ts"]
+            handler_ws = workspace.clone().permissions(allowed=allowed).write_file(file, content)
+            context = []
+            for path in self.files_relevant + [file]:
+                content = await handler_ws.read_file(path)
+                context.append(f"\n<file path=\"{path}\">\n{content.strip()}\n</file>\n")
+            context.append(f"Allowed paths and directories: {allowed}")
+            prompt = prompt_template.render(
+                project_context="\n".join(context),
+                handler_name=handler_name,
+            )
+            message = Message(role="user", content=[TextRaw(prompt)])
+            node = Node(BaseData(handler_ws, [message], {}))
+            self.handlers[handler_name] = node
+    
+    async def eval_node(self, node):
+        files_err = await run_write_files(node)
+        if files_err:
+            node.data.messages.append(Message(role="user", content=[files_err]))
+            return False
+        _, tsc_err = await run_tsc_compile(node)
+        if tsc_err:
+            node.data.messages.append(Message(role="user", content=[tsc_err]))
+            return False
+        _, test_err = await run_tests(node)
+        if test_err:
+            node.data.messages.append(Message(role="user", content=[test_err]))
+            return False
+        return True
+    
+    @property
+    def files_inherit(self) -> list[str]:
+        return ["src/db/schema.ts", "src/schema.ts"]
+    
+    @property
+    def files_relevant(self) -> list[str]:
+        return ["src/helpers/index.ts", "src/schema.ts", "src/db/schema.ts"]
+    
+    async def dump(self) -> object:
+        if not self.handlers:
+            return {}
+        return {name: await self.dump_node(node) for name, node in self.handlers.items()}
+    
+    async def load(self, data: object):
+        if not isinstance(data, dict):
+            raise ValueError(f"Expected dict got {type(data)}")
+        self.handlers = {}
+        for name, node_data in data.items():
+            node = await self.load_node(node_data)
+            self.handlers[name] = node
+
+
+class IndexActor(BaseTRPCActor):
+    root: Node[BaseData] | None = None
+
+    def __init__(self, llm: AsyncLLM, workspace: Workspace, model_params: ModelParams, beam_width: int = 1, max_depth: int = 5):
+        super().__init__(llm, workspace, model_params, beam_width=beam_width, max_depth=max_depth)
+        self.root = None
+    
+    async def execute(self, user_prompt: str) -> Node[BaseData]:
+        await self.cmd_create(user_prompt)
+        solution = await self.search(self.root)
+        if solution is None:
+            raise ValueError("No solution found")
+        return solution
+    
+    async def cmd_create(self, files: dict[str, str]):
+        workspace = self.workspace.clone()
+        for file, content in files.items():
+            workspace.write_file(file, content)
+        workspace = workspace.permissions(allowed=self.files_allowed)
+        context = []
+        files_relevant = [key for key in files.keys() if key.startswith("src/handlers/")]
+        for path in files_relevant:
+            content = await workspace.read_file(path)
+            context.append(f"\n<file path=\"{path}\">\n{content.strip()}\n</file>\n")
+        context.append(f"Allowed paths and directories: {self.files_allowed}")
+        jinja_env = jinja2.Environment()
+        prompt_template = jinja_env.from_string(playbooks.BACKEND_INDEX_PROMPT)
+        prompt = prompt_template.render(
+            project_context="\n".join(context),
+        )
+        message = Message(role="user", content=[TextRaw(prompt)])
+        self.root = Node(BaseData(workspace, [message], {}))
+    
+    async def eval_node(self, node: Node[BaseData]) -> bool:
+        files_err = await run_write_files(node)
+        if files_err:
+            node.data.messages.append(Message(role="user", content=[files_err]))
+            return False
+        _, tsc_err = await run_tsc_compile(node)
+        if tsc_err:
+            node.data.messages.append(Message(role="user", content=[tsc_err]))
+            return False
+        return True
+    
+    @property
+    def files_allowed(self) -> list[str]:
+        return ["src/index.ts"]
+    
+    async def dump(self) -> object:
+        if self.root is None:
+            return []
+        return await self.dump_node(self.root)
+    
+    async def load(self, data: object):
+        if not isinstance(data, list):
+            raise ValueError(f"Expected list got {type(data)}")
+        if not data:
+            return
+        self.root = await self.load_node(data)
+
+
+class FrontendActor(BaseTRPCActor):
+    root: Node[BaseData] | None = None
+
+    def __init__(self, llm: AsyncLLM, workspace: Workspace, model_params: ModelParams, beam_width: int = 1, max_depth: int = 5):
+        super().__init__(llm, workspace, model_params, beam_width=beam_width, max_depth=max_depth)
+        self.root = None
+    
+    async def execute(self, user_prompt: str) -> Node[BaseData]:
+        await self.cmd_create(user_prompt)
+        solution = await self.search(self.root)
+        if solution is None:
+            raise ValueError("No solution found")
+        return solution
+    
+    async def cmd_create(self, user_prompt: str, files: dict[str, str]):
+        workspace = self.workspace.clone()
+        
