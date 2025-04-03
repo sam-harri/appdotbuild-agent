@@ -27,7 +27,6 @@ async def test_message_endpoint(
     agent_state: Optional[Dict[str, Any]] = None,
     settings: Optional[Dict[str, Any]] = None,
     verbose: bool = False,
-    timeout: int = 60
 ):
     """Test the SSE /message endpoint."""
     if not chatbot_id:
@@ -53,14 +52,11 @@ async def test_message_endpoint(
     print("\nReceiving SSE events:")
     
     async with aiohttp.ClientSession() as session:
-        # Use a client timeout to avoid hanging indefinitely
-        client_timeout = aiohttp.ClientTimeout(total=timeout)
         try:
             async with session.post(
                 server_url,
                 json=request_data,
                 headers={"Accept": "text/event-stream"},
-                timeout=client_timeout
             ) as response:
                 if response.status != 200:
                     error_text = await response.text()
@@ -171,7 +167,6 @@ async def main():
     parser.add_argument("--max-iterations", type=int, default=3, help="Maximum iterations")
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
     parser.add_argument("--interactive", "-i", action="store_true", help="Interactive mode")
-    parser.add_argument("--timeout", type=int, default=10, help="Timeout in seconds (default: 10)")
     
     args = parser.parse_args()
     
@@ -194,7 +189,6 @@ async def main():
             trace_id=args.trace_id,
             settings=settings,
             verbose=args.verbose,
-            timeout=args.timeout
         )
 
 if __name__ == "__main__":
