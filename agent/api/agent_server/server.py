@@ -18,8 +18,6 @@ from .models import (
     AgentRequest, 
     AgentSseEvent, 
     AgentMessage, 
-    UserMessage,
-    ConversationMessage,
     AgentStatus, 
     MessageKind,
     ErrorResponse
@@ -79,7 +77,7 @@ class AgentSession:
         logger.info(f"Application initialized for trace {self.trace_id}")
     
     
-    def initialize_fsm(self, messages: List[ConversationMessage], agent_state: Optional[Dict[str, Any]] = None):
+    def initialize_fsm(self, messages: List[str], agent_state: Optional[Dict[str, Any]] = None):
         """Initialize the FSM with messages and optional state"""
         logger.info(f"Initializing FSM for trace {self.trace_id}")
         logger.debug(f"Agent state present: {agent_state is not None}")
@@ -88,9 +86,8 @@ class AgentSession:
             logger.info(f"Setting external state for trace {self.trace_id}")
             self.fsm_api.set_full_external_state(agent_state)
 
-        # Extract user messages from the conversation history
-        user_messages = [msg.content for msg in messages if hasattr(msg, "role") and msg.role == "user"]
-        app_description = "\n".join(user_messages)
+        #TODO: Avoid merging messages with the app description
+        app_description = "\n".join(messages)
         logger.debug(f"App description length: {len(app_description)}")
         self.messages = [{"role": "user", "content": app_description}]
         
@@ -130,7 +127,6 @@ class AgentSession:
                     status=status,
                     trace_id=self.trace_id,
                     message=AgentMessage(
-                        role="agent",
                         kind=MessageKind.STAGE_RESULT,
                         content=new_message["content"],
                         agent_state=self.get_state(),
@@ -148,7 +144,6 @@ class AgentSession:
                 status=AgentStatus.IDLE,
                 trace_id=self.trace_id,
                 message=AgentMessage(
-                    role="agent",
                     kind=MessageKind.RUNTIME_ERROR,
                     content=f"Error processing step: {str(e)}",
                     agent_state=None,
@@ -199,18 +194,14 @@ async def get_agent_session(
 
 def _get_agent_state_by_messages(message: Dict[str, Any]) -> Dict[str, Any]:
     """Get the agent state from the messages"""
-    result = message
-    if isinstance(message.get("message", {}).get("agentState"), dict):
-        if "message" not in result:
-            result["message"] = {}
-        if "agentState" not in result["message"]:
-            result["message"]["agentState"] = {}
-        for key, value in message["message"]["agentState"].items():
-            if hasattr(value, "to_dict"):
-                result["message"]["agentState"][key] = value.to_dict()
+    result = {}
+    if isinstance(message.get("message", {}).get("agent_state"), dict):
+            for key, value in message["message"]["agent_state"].items():
+                if hasattr(value, "to_dict"):
+                    result["message"]["agent_state"][key] = value.to_dict()
     return result
 
-async def sse_event_generator(session: AgentSession, messages: List[ConversationMessage], agent_state: Optional[Dict[str, Any]] = None) -> AsyncGenerator[str, None]:
+async def sse_event_generator(session: AgentSession, messages: List[str], agent_state: Optional[Dict[str, Any]] = None) -> AsyncGenerator[str, None]:
     """Generate SSE events for the agent session"""
     try:
         logger.info(f"Initializing FSM for trace {session.trace_id}")
@@ -254,7 +245,6 @@ async def sse_event_generator(session: AgentSession, messages: List[Conversation
             status=AgentStatus.IDLE,
             trace_id=session.trace_id,
             message=AgentMessage(
-                role="agent",
                 kind=MessageKind.RUNTIME_ERROR,
                 content=f"Error processing request: {str(e)}",
                 agent_state=None,

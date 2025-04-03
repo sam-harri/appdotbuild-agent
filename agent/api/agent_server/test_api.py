@@ -35,14 +35,8 @@ async def test_message_endpoint(
     if not trace_id:
         trace_id = uuid.uuid4().hex
     
-    # Convert string messages to UserMessage format
-    formatted_messages = [{
-        "role": "user",
-        "content": msg
-    } for msg in messages]
-    
     request_data = {
-        "allMessages": formatted_messages,
+        "allMessages": messages,
         "chatbotId": chatbot_id,
         "traceId": trace_id,
     }
@@ -106,7 +100,7 @@ async def test_message_endpoint(
                                     print("-" * 40)
                                     
                                     # Extract agent state for possible future requests
-                                    last_agent_state = event_json.get("message", {}).get("agentState")
+                                    last_agent_state = event_json.get("message", {}).get("agent_state")
                                     
                                 except json.JSONDecodeError:
                                     print(f"Invalid JSON in event: {event_data}")
@@ -120,7 +114,7 @@ async def test_message_endpoint(
                 return {
                     "chatbot_id": chatbot_id,
                     "trace_id": uuid.uuid4().hex,  # Generate new trace ID for continuation
-                    "agentState": last_agent_state
+                    "agent_state": last_agent_state
                 }
         except aiohttp.ClientError as e:
             print(f"Connection error: {str(e)}")
@@ -148,7 +142,7 @@ async def interactive_session(server_url: str):
             # Continue conversation
             # Add the new message to previous messages
             messages = state.get("all_messages", [])
-            messages.append({"role": "user", "content": message})
+            messages.append(message)
             state["all_messages"] = messages
             
             state = await test_message_endpoint(
@@ -156,7 +150,7 @@ async def interactive_session(server_url: str):
                 messages=messages,
                 chatbot_id=state["chatbot_id"],
                 trace_id=state["trace_id"],
-                agent_state=state["agentState"],
+                agent_state=state["agent_state"],
                 settings={"max-iterations": 3},
                 verbose=False
             )
