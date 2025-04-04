@@ -2,9 +2,7 @@ from typing import Literal, Dict, Any, List
 import json
 import hashlib
 import logging
-import asyncio
 from pathlib import Path
-
 from models.common import AsyncLLM, Completion, Message, Tool, TextRaw
 
 logger = logging.getLogger(__name__)
@@ -40,7 +38,8 @@ class CachedLLM(AsyncLLM):
         """load cache from file if it exists, otherwise return empty dict."""
         if (cache_file := Path(self.cache_path)).exists():
             with cache_file.open("r") as f:
-                return json.load(f)
+                if (content := f.read()):
+                    return json.loads(content)
         return {}
 
     def _save_cache(self) -> None:
@@ -122,78 +121,3 @@ class CachedLLM(AsyncLLM):
                     )
             case _:
                 raise ValueError(f"unknown cache mode: {self.cache_mode}")
-
-
-if __name__ == "__main__":
-    import anthropic
-    from models.anthropic_bedrock import AnthropicBedrockLLM
-
-    async def test_cached_llm():
-        # Create a base anthropic client
-        client = anthropic.AsyncAnthropicBedrock()
-        anthropic_llm = AnthropicBedrockLLM(client)
-
-        # Wrap it with caching - record mode
-        cache_path = "/tmp/test_cache.json"
-        cached_llm = CachedLLM(
-            client=anthropic_llm,
-            cache_mode="record",
-            cache_path=cache_path
-        )
-
-        # Create a simple test message
-        test_message = Message(
-            role="user",
-            content=[TextRaw("Hello, world!")]
-        )
-
-        # Test with record mode
-        print("Testing in record mode...")
-        response = await cached_llm.completion(
-            model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
-            messages=[test_message],
-            max_tokens=100
-        )
-        print(f"Response received, tokens: {response.input_tokens} in, {response.output_tokens} out")
-        for block in response.content:
-            if isinstance(block, TextRaw):
-                print(f"Response text: {block.text}...")
-
-        # Now test with replay mode using the same cache file
-        print("\nTesting in replay mode...")
-        replay_cached_llm = CachedLLM(
-            client=anthropic_llm,
-            cache_mode="replay",
-            cache_path=cache_path
-        )
-
-        replay_response = await replay_cached_llm.completion(
-            model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
-            messages=[test_message],
-            max_tokens=100
-        )
-        print(f"Cached response retrieved, tokens: {replay_response.input_tokens} in, {replay_response.output_tokens} out")
-        for block in replay_response.content:
-            if isinstance(block, TextRaw):
-                print(f"Response text: {block.text}...")
-
-        # test in off mode
-        cached_llm_off = CachedLLM(
-            client=anthropic_llm,
-            cache_mode="off",
-            cache_path=cache_path
-        )
-        off_response = await cached_llm_off.completion(
-            model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
-            messages=[test_message],
-            max_tokens=100
-        )
-        print(f"Off mode response received, tokens: {off_response.input_tokens} in, {off_response.output_tokens} out")
-        for block in off_response.content:
-            if isinstance(block, TextRaw):
-                print(f"Response text: {block.text}...")
-
-        print("Cache test successful!")
-
-    # Run the test
-    asyncio.run(test_cached_llm())
