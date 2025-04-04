@@ -3,6 +3,25 @@ import dagger
 from dagger import dag, function, object_type, Container, Directory, ReturnType
 
 
+class ExecResult:
+    exit_code: int
+    stdout: str
+    stderr: str
+
+    def __init__(self, exit_code: int, stdout: str, stderr: str):
+        self.exit_code = exit_code
+        self.stdout = stdout
+        self.stderr = stderr
+
+    @classmethod
+    async def from_ctr(cls, ctr: dagger.Container) -> Self:
+        return cls(
+            exit_code=await ctr.exit_code(),
+            stdout=await ctr.stdout(),
+            stderr=await ctr.stderr(),
+        )
+
+
 @object_type
 class Workspace:
     ctr: Container
@@ -90,24 +109,23 @@ class Workspace:
         return await start.with_directory(".", self.ctr.directory(".")).with_exec(["git", "diff"]).stdout()
     
     @function
-    def exec(self, command: list[str]) -> Container:
-        return self.ctr.with_exec(command, expect=ReturnType.ANY)
+    async def exec(self, command: list[str]) -> ExecResult:
+        return await ExecResult.from_ctr(
+            self.ctr.with_exec(command, expect=ReturnType.ANY)
+        )
     
     @function
-    def exec_with_pg(self, command: list[str]) -> Container:
-        #pg_shim = "while ! pg_isready -h postgres -U postgres; do sleep 1; done"
+    async def exec_with_pg(self, command: list[str]) -> ExecResult:
         postgresdb = (
             dag.container()
             .from_("postgres:17.0-alpine")
             .with_env_variable("POSTGRES_USER", "postgres")
             .with_env_variable("POSTGRES_PASSWORD", "postgres")
             .with_env_variable("POSTGRES_DB", "postgres")
-            #.with_exposed_port(5432)
-            #.with_exec(["sh", "-c", pg_shim])
             .as_service(use_entrypoint=True)
         )
 
-        return (
+        return await ExecResult.from_ctr(
             self.ctr
             .with_exec(["apk", "--update", "add", "postgresql-client"]) # TODO: might be not needed
             .with_service_binding("postgres", postgresdb)

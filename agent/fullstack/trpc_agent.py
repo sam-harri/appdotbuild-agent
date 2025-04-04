@@ -10,7 +10,7 @@ import dagger
 import playbooks
 import statemachine
 from base_node import Node
-from workspace import Workspace
+from workspace import Workspace, ExecResult
 from actors import BaseData, BaseActor, LLMActor
 from models.common import AsyncLLM, Message, TextRaw, Tool, ToolUse, ToolUseResult
 #from ..api.agent_server.models import AgentSseEvent
@@ -44,21 +44,6 @@ class Context:
     #event_tx: MemoryObjectSendStream[AgentSseEvent] | None
 
 
-@dataclasses.dataclass
-class ExecResult:
-    exit_code: int
-    stdout: str
-    stderr: str
-
-    @classmethod
-    async def from_dagger(cls, ctr: dagger.Container) -> Self:
-        return cls(
-            exit_code=await ctr.exit_code(),
-            stdout=await ctr.stdout(),
-            stderr=await ctr.stderr(),
-        )
-
-
 async def run_write_files(node: Node[BaseData]) -> TextRaw | None:
     pattern = re.compile(
         r'<file path="(?P<path>[^"]+)">(?P<content>.*?)</file>',
@@ -83,64 +68,30 @@ async def run_write_files(node: Node[BaseData]) -> TextRaw | None:
 
 
 async def run_tsc_compile(node: Node[BaseData]) -> tuple[ExecResult, TextRaw | None]:
-    container = node.data.workspace.exec(["bun", "run", "tsc", "--noEmit"])
-    result = await ExecResult.from_dagger(container)
+    result = await node.data.workspace.exec(["bun", "run", "tsc", "--noEmit"])
     if result.exit_code == 0:
         return result, None
     return result, TextRaw(f"Error running tsc: {result.stdout}")
 
 
 async def run_drizzle(node: Node[BaseData]) -> tuple[ExecResult, TextRaw | None]:
-    container = node.data.workspace.exec_with_pg(["bun", "run", "drizzle-kit", "push", "--force"])
-    result = await ExecResult.from_dagger(container)
+    result = await node.data.workspace.exec_with_pg(["bun", "run", "drizzle-kit", "push", "--force"])
     if result.exit_code == 0 and not result.stderr:
         return result, None
     return result, TextRaw(f"Error running drizzle: {result.stderr}")
 
 
 async def run_tests(node: Node[BaseData]) -> tuple[ExecResult, TextRaw | None]:
-    container = node.data.workspace.exec_with_pg(["bun", "test"])
-    result = await ExecResult.from_dagger(container)
+    result = await node.data.workspace.exec_with_pg(["bun", "test"])
     if result.exit_code == 0:
         return result, None
     return result, TextRaw(f"Error running tests: {result.stderr}")
 
 
-async def run_front_check(node: Node[BaseData]) -> tuple[ExecResult, TextRaw | None]:
-    container = node.data.workspace.exec(["bun", "run", "tsc", "-p", "tsconfig.app.json", "--noEmit"])
-    result = await ExecResult.from_dagger(container)
-    if result.exit_code == 0:
-        return result, None
-    return result, TextRaw(f"Error running tsc: {result.stdout}")
-
-
-async def run_tools(node: Node[BaseData]) -> list[ToolUseResult]:
-    result = []
-    for block in node.data.head().content:
-        if not isinstance(block, ToolUse):
-            continue
-        match block.name:
-            case "read_file":
-                try:
-                    tool_content = await node.data.workspace.read_file(block.input["path"]) # pyright: ignore[reportIndexIssue]
-                    result.append(ToolUseResult.from_tool_use(block, tool_content))
-                except FileNotFoundError as e:
-                    result.append(ToolUseResult.from_tool_use(block, str(e), is_error=True))
-            case unknown:
-                result.append(ToolUseResult.from_tool_use(block, f"Unknown tool: {unknown}", is_error=True))
-    return result
-
-
-class ModelParams(TypedDict):
-    model: str
-    max_tokens: int
-    tools: NotRequired[list[Tool]]
-
-
 class BaseTRPCActor(BaseActor, LLMActor):
-    model_params: ModelParams
+    model_params: dict
 
-    def __init__(self, llm: AsyncLLM, workspace: Workspace, model_params: ModelParams, beam_width: int = 5, max_depth: int = 5):
+    def __init__(self, llm: AsyncLLM, workspace: Workspace, model_params: dict, beam_width: int = 5, max_depth: int = 5):
         self.llm = llm
         self.workspace = workspace
         self.model_params = model_params
@@ -171,7 +122,7 @@ class BaseTRPCActor(BaseActor, LLMActor):
 class DraftActor(BaseTRPCActor):
     root: Node[BaseData] | None = None
 
-    def __init__(self, llm: AsyncLLM, workspace: Workspace, model_params: ModelParams, beam_width: int = 1, max_depth: int = 5):
+    def __init__(self, llm: AsyncLLM, workspace: Workspace, model_params: dict, beam_width: int = 1, max_depth: int = 5):
         super().__init__(llm, workspace, model_params, beam_width=beam_width, max_depth=max_depth)
         self.root = None
 
@@ -240,11 +191,11 @@ class DraftActor(BaseTRPCActor):
 class HandlersActor(BaseTRPCActor):
     handlers: dict[str, Node[BaseData]]
 
-    def __init__(self, llm: AsyncLLM, workspace: Workspace, model_params: ModelParams, beam_width: int = 1, max_depth: int = 5):
+    def __init__(self, llm: AsyncLLM, workspace: Workspace, model_params: dict, beam_width: int = 1, max_depth: int = 5):
         super().__init__(llm, workspace, model_params, beam_width=beam_width, max_depth=max_depth)
         self.handlers = {}
     
-    async def execute(self, files: dict[str, str]) -> dict[str, Node[BaseData]]:
+    async def execute(self, files: dict[str, str]) -> dict[str, Node[BaseData] | None]:
         async def task_fn(node: Node[BaseData], key: str, tx: MemoryObjectSendStream[tuple[str, Node[BaseData] | None]]):
             async with tx:
                 await tx.send((key, await self.search(node)))
@@ -329,7 +280,7 @@ class HandlersActor(BaseTRPCActor):
 class IndexActor(BaseTRPCActor):
     root: Node[BaseData] | None = None
 
-    def __init__(self, llm: AsyncLLM, workspace: Workspace, model_params: ModelParams, beam_width: int = 1, max_depth: int = 5):
+    def __init__(self, llm: AsyncLLM, workspace: Workspace, model_params: dict, beam_width: int = 1, max_depth: int = 5):
         super().__init__(llm, workspace, model_params, beam_width=beam_width, max_depth=max_depth)
         self.root = None
     
@@ -390,7 +341,7 @@ class IndexActor(BaseTRPCActor):
 class FrontendActor(BaseTRPCActor):
     root: Node[BaseData] | None = None
 
-    def __init__(self, llm: AsyncLLM, workspace: Workspace, model_params: ModelParams, beam_width: int = 1, max_depth: int = 5):
+    def __init__(self, llm: AsyncLLM, workspace: Workspace, model_params: dict, beam_width: int = 1, max_depth: int = 5):
         super().__init__(llm, workspace, model_params, beam_width=beam_width, max_depth=max_depth)
         self.root = None
     
@@ -403,4 +354,46 @@ class FrontendActor(BaseTRPCActor):
     
     async def cmd_create(self, user_prompt: str, files: dict[str, str]):
         workspace = self.workspace.clone()
+        ...
+
+    async def eval_node(self, node: Node[BaseData]) -> bool:
+        content = await self.run_tools(node)
+        files_err = await run_write_files(node)
+        if files_err:
+            content.append(files_err)
+        tsc_result = await node.data.workspace.exec(["bun", "run", "tsc", "-p", "tsconfig.app.json", "--noEmit"])
+        if tsc_result.exit_code != 0:
+            content.append(TextRaw(f"Error running tsc: {tsc_result.stdout}"))
+        if content:
+            node.data.messages.append(Message(role="user", content=content))
+            return False
+        return True
+
+    async def run_tools(self, node: Node[BaseData]) -> list[ToolUseResult]:
+        result = []
+        for block in node.data.head().content:
+            if not isinstance(block, ToolUse):
+                continue
+            match block.name:
+                case "read_file":
+                    try:
+                        tool_content = await node.data.workspace.read_file(block.input["path"]) # pyright: ignore[reportIndexIssue]
+                        result.append(ToolUseResult.from_tool_use(block, tool_content))
+                    except FileNotFoundError as e:
+                        result.append(ToolUseResult.from_tool_use(block, str(e), is_error=True))
+                case unknown:
+                    result.append(ToolUseResult.from_tool_use(block, f"Unknown tool: {unknown}", is_error=True))
+        return result
+    
+    @property
+    def files_relevant(self) -> list[str]:
+        return ["/app/server/src/schema.ts", "/app/server/src/index.ts", "src/utils/trpc.ts"]
+    
+    @property
+    def files_protected(self) -> list[str]:
+        return ["src/components/ui"]
+    
+    @property
+    def files_allowed(self) -> list[str]:
+        return ["src/App.tsx", "src/components/", "src/App.css"]
         
