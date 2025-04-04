@@ -371,9 +371,10 @@ class FrontendActor(BaseTRPCActor):
         files_err = await run_write_files(node)
         if files_err:
             content.append(files_err)
-        tsc_result = await node.data.workspace.exec(["bun", "run", "tsc", "-p", "tsconfig.app.json", "--noEmit"])
-        if tsc_result.exit_code != 0:
-            content.append(TextRaw(f"Error running tsc: {tsc_result.stdout}"))
+        if node.data.files:
+            tsc_result = await node.data.workspace.exec(["bun", "run", "tsc", "-p", "tsconfig.app.json", "--noEmit"])
+            if tsc_result.exit_code != 0:
+                content.append(TextRaw(f"Error running tsc: {tsc_result.stdout}"))
         if content:
             node.data.messages.append(Message(role="user", content=content))
             return False
