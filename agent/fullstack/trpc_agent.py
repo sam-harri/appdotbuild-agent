@@ -15,25 +15,6 @@ from actors import BaseData, BaseActor, LLMActor
 from models.common import AsyncLLM, Message, TextRaw, Tool, ToolUse, ToolUseResult
 
 
-class FSMState(str, enum.Enum):
-    DRAFT_GEN = "generating_draft"
-    HANDLERS = "generating_handlers"
-    INDEX = "generating_index"
-    FRONTEND = "generating_frontend"
-    IDLE = "idle"
-
-
-class FSMEvent(str, enum.Enum):
-    MESSAGE = "message"
-
-
-@dataclasses.dataclass
-class Context:
-    server_files: dict[str, str]
-    client_files: dict[str, str]
-    error: Exception | None # Descriptive and used by FSMTools
-
-
 async def run_write_files(node: Node[BaseData]) -> TextRaw | None:
     pattern = re.compile(
         r'<file path="(?P<path>[^"]+)">(?P<content>.*?)</file>',
