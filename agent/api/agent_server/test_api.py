@@ -91,18 +91,26 @@ async def test_message_endpoint(
                                         print(json.dumps(event_json, indent=2))
                                     else:
                                         # Print a simplified version
-                                        status = event_json.get("status")
-                                        kind = event_json.get("message", {}).get("kind")
-                                        content = event_json.get("message", {}).get("content")
+                                        # Parse the event using the models from models.py
+                                        from models import AgentSseEvent
+                                        
+                                        event = AgentSseEvent.from_json(event_data)
+                                        status = event.status
+                                        message = event.message
+                                        kind = message.kind
+                                        content = message.content
+                                        diff = message.unified_diff
+                                        
                                         if content and len(content) > 1000:
                                             content = content[:997] + "..."
                                         
                                         print(f"Status: {status}, Kind: {kind}")
                                         print(f"Content: {content}")
+                                        print(f"Diff: {diff} (type: {type(diff).__name__})")
                                     
                                     print("-" * 40)
                                     
-                                    last_agent_state = event_json.get("message", {}).get("agentState")
+                                    last_agent_state = event.message.agent_state
                                     
                                 except json.JSONDecodeError:
                                     print(f"Invalid JSON in event: {event_data}")
