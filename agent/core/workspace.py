@@ -1,0 +1,161 @@
+from typing import Self
+import dagger
+from dagger import dag, function, object_type, Container, Directory, ReturnType
+
+
+class ExecResult:
+    exit_code: int
+    stdout: str
+    stderr: str
+
+    def __init__(self, exit_code: int, stdout: str, stderr: str):
+        self.exit_code = exit_code
+        self.stdout = stdout
+        self.stderr = stderr
+
+    @classmethod
+    async def from_ctr(cls, ctr: dagger.Container) -> Self:
+        return cls(
+            exit_code=await ctr.exit_code(),
+            stdout=await ctr.stdout(),
+            stderr=await ctr.stderr(),
+        )
+
+
+@object_type
+class Workspace:
+    ctr: Container
+    start: Directory
+    protected: set[str]
+    allowed: set[str]
+
+    @classmethod
+    async def create(
+        cls,
+        base_image: str = "alpine",
+        context: Directory = dag.directory(),
+        setup_cmd: list[list[str]] = [],
+        protected: list[str] = [],
+        allowed: list[str] = [],
+    ) -> Self:
+        ctr = (
+            dag
+            .container()
+            .from_(base_image)
+            .with_workdir("/app")
+            .with_directory("/app", context)
+        )
+        for cmd in setup_cmd:
+            ctr = ctr.with_exec(cmd)
+        return cls(ctr=ctr, start=context, protected=set(protected), allowed=set(allowed))
+    
+    @function
+    def permissions(self, protected: list[str] = [], allowed: list[str] = []) -> Self:
+        self.protected = set(protected)
+        self.allowed = set(allowed)
+        return self
+    
+    @function
+    def cwd(self, path: str) -> Self:
+        self.ctr = self.ctr.with_workdir(path)
+        return self
+    
+    @function
+    def rm(self, path: str) -> Self:
+        protected = self.protected - self.allowed # allowed take precedence
+        if any(path.startswith(p) for p in protected):
+            raise PermissionError(f"Attempted to remove {path} which is in protected paths: {protected}")
+        self.ctr = self.ctr.without_file(path)
+        return self
+    
+    @function
+    async def ls(self, path: str) -> list[str]:
+        try:
+            return await self.ctr.directory(path).entries()
+        except dagger.QueryError as e:
+            raise FileNotFoundError(f"Directory not found: {path}")
+    
+    @function
+    async def read_file(self, path: str) -> str:
+        try:
+            return await self.ctr.file(path).contents()
+        except dagger.QueryError as e:
+            raise FileNotFoundError(f"File not found: {path}")
+    
+    @function
+    def write_file(self, path: str, contents: str, force: bool = False) -> Self:
+        if not force:
+            protected = self.protected - self.allowed # allowed take precedence
+            if self.allowed and not any(path.startswith(p) for p in self.allowed):
+                raise PermissionError(f"Attempted to write {path} which is not in allowed paths: {self.allowed}")
+            if any(path.startswith(p) for p in protected):
+                raise PermissionError(f"Attempted to write {path} which is in protected paths: {protected}")
+        self.ctr = self.ctr.with_new_file(path, contents)
+        return self
+
+    @function
+    async def read_file_lines(self, path: str, start: int = 1, end: int = 100) -> str:
+        return (
+            await self.ctr
+            .with_exec(["sed", "-n", f"{start},{end}p", path])
+            .stdout()
+        )
+    
+    @function
+    async def diff(self) -> str:
+        start = dag.container().from_("alpine/git").with_workdir("/app").with_directory("/app", self.start)
+        if ".git" not in self.start.entries():
+            start = start.with_exec(["git", "init"]).with_exec(["git", "add", "."]).with_exec(["git", "commit", "-m", "'initial'"])
+        return await start.with_directory(".", self.ctr.directory(".")).with_exec(["git", "diff"]).stdout()
+    
+    @function
+    async def exec(self, command: list[str]) -> ExecResult:
+        return await ExecResult.from_ctr(
+            self.ctr.with_exec(command, expect=ReturnType.ANY)
+        )
+    
+    @function
+    async def exec_with_pg(self, command: list[str]) -> ExecResult:
+        postgresdb = (
+            dag.container()
+            .from_("postgres:17.0-alpine")
+            .with_env_variable("POSTGRES_USER", "postgres")
+            .with_env_variable("POSTGRES_PASSWORD", "postgres")
+            .with_env_variable("POSTGRES_DB", "postgres")
+            .as_service(use_entrypoint=True)
+        )
+
+        return await ExecResult.from_ctr(
+            self.ctr
+            .with_exec(["apk", "--update", "add", "postgresql-client"]) # TODO: might be not needed
+            .with_service_binding("postgres", postgresdb)
+            .with_env_variable("DATABASE_URL", "postgres://postgres:postgres@postgres:5432/postgres")
+            .with_exec(["sh", "-c", "while ! pg_isready -h postgres -U postgres; do sleep 1; done"])
+            .with_exec(command, expect=ReturnType.ANY)
+        )
+    
+    @function
+    async def exec_mut(self, command: list[str]) -> Self:
+        ctr = self.ctr.with_exec(command, expect=ReturnType.ANY)
+        if await ctr.exit_code() != 0:
+            raise Exception(f"Command failed: {command}\nError: {await ctr.stderr()}")
+        self.ctr = ctr
+        return self
+    
+    @function
+    def reset(self) -> Self:
+        self.ctr = self.ctr.with_directory(".", self.start)
+        return self
+    
+    @function
+    def container(self) -> Container:
+        return self.ctr
+    
+    @function
+    def clone(self) -> Self:
+        return Workspace(
+            ctr=self.ctr,
+            start=self.start,
+            protected=self.protected,
+            allowed=self.allowed
+        )
