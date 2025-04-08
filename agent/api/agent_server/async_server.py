@@ -1,8 +1,8 @@
-import asyncio
 import logging
-from typing import Dict, List, Any, Optional, AsyncGenerator
+from typing import AsyncGenerator
 from contextlib import asynccontextmanager
 
+import anyio
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 
@@ -14,8 +14,8 @@ from models import (
     MessageKind,
     ErrorResponse
 )
-from interface import FSMInterface
-from empty_diff_impl import EmptyDiffFSMImplementation
+from interface import AgentInterface
+from empty_diff_impl import EmptyDiffAgentImplementation
 
 logger = logging.getLogger(__name__)
 
@@ -32,78 +32,40 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-async def get_fsm_session(chatbot_id: str, trace_id: str, settings: Optional[Dict[str, Any]] = None) -> FSMInterface:
-    """
-    Get or create an FSM session
-    
-    Args:
-        chatbot_id: ID of the chatbot
-        trace_id: Trace ID
-        settings: Optional settings
-        
-    Returns:
-        FSM interface implementation
-    """
-    # Create a new FSM implementation with the provided parameters
-    logger.info(f"Creating new FSM session for {chatbot_id}:{trace_id}")
-    return EmptyDiffFSMImplementation(chatbot_id, trace_id, settings)
 
-async def sse_event_generator(fsm: FSMInterface, request: AgentRequest) -> AsyncGenerator[str, None]:
-    """
-    Generate SSE events from the FSM implementation according to the API spec
-    
-    Args:
-        fsm: FSM interface to use
-        request: The agent request containing all messages, chatbot ID, trace ID, agent state and settings
-        
-    Yields:
-        SSE event strings in the format specified by the API
-    """
+async def run_agent[T: AgentInterface](
+    request: AgentRequest,
+    agent_class: type[T],
+    *args,
+    **kwargs,
+) -> AsyncGenerator[str, None]:
+    logger.info(f"Creating new agent session for {request.chatbot_id}:{request.trace_id}")
+    event_tx, event_rx = anyio.create_memory_object_stream[AgentSseEvent](0)
+    agent = agent_class(*args, **kwargs)
     try:
-        # Process the request with the FSM by providing messages and agent state
-        await fsm.process_event(
-            messages=request.all_messages, 
-            agent_state=request.agent_state
-        )
-        
-        # Loop to get and yield events
-        while True:
-            # Check for a new event
-            event = await fsm.get_next_event()
-            
-            if event:
-                # If we got an event, yield it as an SSE event with proper formatting
-                # Format: data: {json_payload}\n\n
-                yield f"data: {event.to_json()}\n\n"
-                
-                # If the status is idle, we're done processing
-                # This happens when the FSM has completed its work or is waiting for more input
-                if event.status == AgentStatus.IDLE:
-                    break
-            else:
-                # No event available, poll the FSM by processing with empty parameters
-                # This allows the FSM to continue processing without new input
-                await fsm.process_event()
-                
-                # Small delay to avoid CPU spinning while polling
-                await asyncio.sleep(0.1)
-                
-    except Exception as e:
-        logger.error(f"Error in SSE generator: {str(e)}")
-        
-        # Create and yield an error event following the API spec format
-        error_event = AgentSseEvent(
-            status=AgentStatus.IDLE,  # Set to idle since we're ending the stream after error
-            traceId=request.trace_id,  # Use traceId (the alias) not trace_id for instantiation
-            message=AgentMessage(
-                role="agent",
-                kind=MessageKind.RUNTIME_ERROR,
-                content=f"Error processing request: {str(e)}",
-                agent_state=None,
-                unified_diff=""  # Empty string instead of None for valid diff
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(agent.process, request, event_tx)
+            async with event_rx:
+                async for event in event_rx:
+                    yield f"data: {event.to_json()}\n\n"
+    except* Exception as excgroup:
+        for e in excgroup.exceptions:
+            logger.error(f"Error in SSE generator: {str(e)}")
+            error_event = AgentSseEvent(
+                status=AgentStatus.IDLE,
+                traceId=request.trace_id,
+                message=AgentMessage(
+                    role="agent",
+                    kind=MessageKind.RUNTIME_ERROR,
+                    content=f"Error processing request: {str(e)}",
+                    agent_state=None,
+                    unified_diff=""
+                )
             )
-        )
-        yield f"data: {error_event.to_json()}\n\n"
+            yield f"data: {error_event.to_json()}\n\n"
+    finally:
+        logger.info(f"Cleaning up agent session for {request.chatbot_id}:{request.trace_id}")
+
 
 @app.post("/message", response_model=None)
 async def message(request: AgentRequest) -> StreamingResponse:
@@ -130,20 +92,12 @@ async def message(request: AgentRequest) -> StreamingResponse:
         Streaming response with SSE events according to the API spec
     """
     try:
-        logger.info(f"Received message request for chatbot {request.chatbot_id}, trace {request.trace_id}")
-        
-        
-        # Get or create the FSM session for this request
-        fsm = await get_fsm_session(
-            request.chatbot_id, 
-            request.trace_id, 
-            request.settings
-        )
+        logger.info(f"Received message request for chatbot {request.chatbot_id}, trace {request.trace_id}")       
         
         # Start the SSE stream
         logger.info(f"Starting SSE stream for chatbot {request.chatbot_id}, trace {request.trace_id}")
         return StreamingResponse(
-            sse_event_generator(fsm, request),
+            run_agent(request, EmptyDiffAgentImplementation),
             media_type="text/event-stream"
         )
         

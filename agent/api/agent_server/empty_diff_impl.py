@@ -1,19 +1,20 @@
-import asyncio
 import logging
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 
-from interface import FSMInterface
+from anyio.streams.memory import MemoryObjectSendStream
+from interface import AgentInterface
 from models import (
+    AgentRequest,
     AgentSseEvent,
     AgentMessage,
-    ConversationMessage,
     AgentStatus,
     MessageKind
 )
 
 logger = logging.getLogger(__name__)
 
-class EmptyDiffFSMImplementation(FSMInterface):
+
+class EmptyDiffAgentImplementation(AgentInterface):
     """
     Minimal implementation of FSMInterface that returns empty dummy results.
     Used for testing the SSE stream functionality.
@@ -31,47 +32,30 @@ class EmptyDiffFSMImplementation(FSMInterface):
         self.chatbot_id = chatbot_id or "default-bot"
         self.trace_id = trace_id or "default-trace"
         self.settings = settings or {}
-        self.event_queue = asyncio.Queue()
         self.has_initialized = False
-        
-    async def process_event(self, 
-                           messages: Optional[List[ConversationMessage]] = None, 
-                           agent_state: Optional[Dict[str, Any]] = None) -> None:
+    
+    async def process(self, request: AgentRequest, event_tx: MemoryObjectSendStream[AgentSseEvent]) -> None:
         """
-        Process an event and add response events to the queue
+        Process the incoming request and send events to the event stream
         
         Args:
-            messages: Optional list of messages for initialization
-            agent_state: Optional agent state for initialization
+            request: Incoming agent request
+            event_tx: Event transmission stream
         """
-        logger.info(f"Processing event for {self.chatbot_id}:{self.trace_id}")
-        
-        # Update the test to match the API spec
-        # Create agent message with EXPLICIT unifiedDiff='' instead of unified_diff=''
-        agent_message = AgentMessage(
-            role="agent",
-            kind=MessageKind.STAGE_RESULT,
-            content="FSM initialized with EmptyDiffFSMImplementation",
-            agent_state=agent_state or {},
-            unifiedDiff=""  # Use the alias name directly
-        )
-        
-        # Create initialization event with the message
-        event = AgentSseEvent(
-            status=AgentStatus.IDLE,
-            traceId=self.trace_id,  # Use the trace_id from initialization
-            message=agent_message
-        )
-        await self.event_queue.put(event)
-    
-    async def get_next_event(self) -> Optional[AgentSseEvent]:
-        """
-        Get the next event from the queue
-        
-        Returns:
-            Next event or None if queue is empty
-        """
-        try:
-            return self.event_queue.get_nowait()
-        except asyncio.QueueEmpty:
-            return None
+        logger.info(f"Processing request for {self.chatbot_id}:{self.trace_id}")
+        async with event_tx:
+            agent_message = AgentMessage(
+                role="agent",
+                kind=MessageKind.STAGE_RESULT,
+                content="Agent initialized with EmptyDiffAgentImplementation",
+                agent_state=request.agent_state or {},
+                unifiedDiff=""
+            )
+            
+            event = AgentSseEvent(
+                status=AgentStatus.IDLE,
+                traceId=self.trace_id,
+                message=agent_message
+            )
+            await event_tx.send(event)
+
