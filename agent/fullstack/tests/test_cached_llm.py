@@ -2,7 +2,7 @@ import pytest
 import tempfile
 import anthropic
 from models.cached import CachedLLM
-from models.anthropic_bedrock import AnthropicBedrockLLM
+from models.anthropic_client import AnthropicLLM
 from models.common import Message, TextRaw
 
 pytestmark = pytest.mark.anyio
@@ -15,7 +15,7 @@ def anyio_backend():
 
 async def test_cached_llm():
     with tempfile.NamedTemporaryFile(delete_on_close=False) as tmp_file:
-        base_llm = AnthropicBedrockLLM(anthropic.AsyncAnthropicBedrock())
+        base_llm = AnthropicLLM(anthropic.AsyncAnthropic())
         record_llm = CachedLLM(
             client=base_llm,
             cache_mode="record",
@@ -23,7 +23,7 @@ async def test_cached_llm():
         )
 
         call_args = {
-            "model": "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+            "model": "claude-3-5-haiku-20241022",
             "messages": [Message(role="user", content=[TextRaw("Hello, world!")])],
             "max_tokens": 100,
         }
