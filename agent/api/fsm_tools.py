@@ -11,6 +11,8 @@ from llm.common import Message, ToolUse, ToolResult as CommonToolResult
 from llm.common import ToolUseResult, TextRaw, Tool
 from trpc_agent.application import FSMApplication, FSMEvent, FSMState
 from common import get_logger
+from asyncio import Lock
+
 
 # Configure logging to use stderr instead of stdout
 coloredlogs.install(level="INFO", stream=sys.stderr)
@@ -48,6 +50,7 @@ class FSMToolProcessor:
             fsm_app: FSM application instance to use, or None if it will be created later
         """
         self.fsm_app = fsm_app
+        self.work_in_progress = Lock()
 
         # Define tool definitions for the AI agent using the common Tool structure
         self.tool_definitions: list[Tool] = [
@@ -404,7 +407,7 @@ When providing feedback, be specific and actionable. If you're unsure about any 
 Do not consider the work complete until all components have been generated and the complete_fsm tool has been called."""
 
 async def run_with_claude(processor: FSMToolProcessor, client: AsyncLLM,
-                   messages: List[Message]) -> Tuple[List[Message] | None, bool, CommonToolResult | None]:
+                   messages: List[Message]) -> Tuple[List[Message], bool, CommonToolResult | None]:
     """
     Send messages to Claude with FSM tool definitions and process tool use responses.
 
@@ -432,6 +435,7 @@ async def run_with_claude(processor: FSMToolProcessor, client: AsyncLLM,
             case TextRaw():
                 logger.info(f"[Claude Response] Message: {message.text}")
             case ToolUse():
+                await processor.work_in_progress.acquire()
                 tool_use_obj = message
                 tool_params = message.input
                 logger.info(f"[Claude Response] Tool use: {message.name}, params: {tool_params}")
@@ -455,43 +459,49 @@ async def run_with_claude(processor: FSMToolProcessor, client: AsyncLLM,
                     })
                 else:
                     raise ValueError(f"Unexpected tool name: {message.name}")
+
+                processor.work_in_progress.release()
             case _:
                 raise ValueError(f"Unexpected message type: {message.type}")
 
-    # Create a single new message with all tool results
-
+    # Create new messages based on response
     new_messages = []
-    if tool_results:
-        # Convert the results to ToolUseResult objects
-        for result_item in tool_results:
-            tool_name = result_item["tool"]
-            result = result_item["result"]
 
-            # Create a ToolUse object
-            tool_use = ToolUse(name=tool_name, input={}, id=uuid.uuid4().hex)
+    # Handle tool results if any
+    for result_item in tool_results:
+        tool_name = result_item["tool"]
+        result = result_item["result"]
 
-            # Create a ToolUseResult object
-            tool_use_result = ToolUseResult.from_tool_use(
-                tool_use=tool_use,
-                content=result.content,
-                is_error=result.is_error
-            )
-            new_messages.append(Message(
+        # Create a ToolUse object
+        tool_use = ToolUse(name=tool_name, input={}, id=uuid.uuid4().hex)
+
+        # Create a ToolUseResult object
+        tool_use_result = ToolUseResult.from_tool_use(
+            tool_use=tool_use,
+            content=result.content,
+            is_error=result.is_error
+        )
+        new_messages.append(Message(
+            role="assistant",
+            content=[tool_use]
+        ))
+        new_messages.append(Message(
+            role="user",
+            content=[
+                tool_use_result,
+                TextRaw("Please continue based on these results, addressing any failures or errors if they exist.")
+            ]
+        ))
+
+    if not tool_results:
+        text_responses = [msg for msg in response.content if isinstance(msg, TextRaw)]
+        if text_responses:
+            new_messages = [Message(
                 role="assistant",
-                content=[tool_use]
-            ))
-            new_messages.append(Message(
-                role="user",
-                content=[
-                    tool_use_result,
-                    TextRaw("Please continue based on these results, addressing any failures or errors if they exist.")
-                ]
-            ))
+                content=text_responses
+            )]
 
-        return new_messages, is_complete, final_tool_result
-    else:
-        # No tools were used
-        return None, is_complete, final_tool_result
+    return new_messages, is_complete, final_tool_result
 
 async def main(initial_prompt: str = "A simple greeting app that says hello in five languages"):
     """
