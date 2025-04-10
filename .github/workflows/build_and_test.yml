@@ -6,6 +6,9 @@ on:
       - mock/sdk
   pull_request:
 
+env:
+  CONTAINER_NAME: agent-apiserver-1
+
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
@@ -19,64 +22,36 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
 
-      - name: Cache Docker layers
-        uses: actions/cache@v3
-        with:
-          path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-buildx-${{ github.ref }}-${{ hashFiles('agent/Dockerfile.*') }}
-          restore-keys: |
-            ${{ runner.os }}-buildx-${{ github.ref }}-${{ hashFiles('agent/Dockerfile.*') }}
+      - name: Set up Docker Compose
+        uses: docker/setup-compose-action@v1
 
-      - name: Build TypeSpec Docker image
-        uses: docker/build-push-action@v4
-        with:
-          context: ./agent
-          file: ./agent/Dockerfile.typespec
-          tags: botbuild/tsp_compiler
-          push: false
-          load: true
-          cache-from: type=local,src=/tmp/.buildx-cache
-          cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
+      - name: Start Docker Compose services
+        working-directory: ./agent/
+        run: docker compose up -d --build
 
-      - name: Build Application Docker image
-        uses: docker/build-push-action@v4
-        with:
-          context: ./agent
-          file: ./agent/Dockerfile.application
-          tags: botbuild/app_schema
-          push: false
-          load: true
-          cache-from: type=local,src=/tmp/.buildx-cache
-          cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
+      - name: Wait for container to potentially start and stabilize
+        run: sleep 30s
 
-      - name: Pull PostgreSQL image
-        run: docker pull postgres:17.0-alpine
-
-      - name: Move cache
+      - name: Check Container Health
         run: |
-          rm -rf /tmp/.buildx-cache
-          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+          echo "Checking health of container: ${{ env.CONTAINER_NAME }}"
+          status=$(docker inspect --format='{{.State.Health.Status}}' ${{ env.CONTAINER_NAME }})
 
-      - name: Install uv
-        run: curl -LsSf https://astral.sh/uv/install.sh | sh
-      
-      - name: Install dagger
-        run: curl -fsSL https://dl.dagger.io/dagger/install.sh | BIN_DIR=$HOME/.local/bin sh
+          if [ "$status" = "healthy" ]; then
+            echo "Container is healthy!"
+            exit 0
+          else
+            echo "Error: Container is not healthy (status: $status). Failing workflow."
+            echo "--- Recent container logs: ---"
+            docker logs --tail 50 ${{ env.CONTAINER_NAME }} || echo "Could not retrieve container logs."
+            exit 1
+          fi
 
-      - name: Install dependencies
+      # This step will run even if the health check step fails
+      - name: Clean up Docker Compose services
+        working-directory: ./agent/
+        if: always() # Ensures this step runs even if previous steps fail
         run: |
-          uv venv
-          uv pip install -r agent/requirements.txt
-
-      - name: Run tests
-        env:
-          DOCKER_HOST: unix:///var/run/docker.sock
-        run: |
-          # Give the current user access to docker socket
-          sudo chmod 666 /var/run/docker.sock
-          PYTHONPATH=$PYTHONPATH:./agent/ uv run pytest -vs agent/tests
-
-      - name: Clean up
-        if: always()
-        run: |
-          docker image prune -f
+          echo "Stopping and removing Docker Compose services..."
+          docker compose down -v --remove-orphans # Stop, remove containers, networks, AND volumes (-v)
+          echo "Cleanup complete."
