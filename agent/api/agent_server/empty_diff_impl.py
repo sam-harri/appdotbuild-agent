@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import Dict, Any, Optional
 
@@ -44,12 +45,26 @@ class EmptyDiffAgentImplementation(AgentInterface):
         """
         logger.info(f"Processing request for {self.chatbot_id}:{self.trace_id}")
         async with event_tx:
+            # Create a test state that includes the input request info
+            agent_state = {
+                "test_state": True,
+                "last_message": request.all_messages[-1].content if request.all_messages else "",
+                "chatbot_id": self.chatbot_id,
+                "trace_id": self.trace_id,
+                "timestamp": str(asyncio.get_event_loop().time())
+            }
+            
+            if request.agent_state:
+                agent_state = request.agent_state
+                
+            logger.debug(f"Setting agent_state: {agent_state}")
+                
             agent_message = AgentMessage(
                 role="agent",
                 kind=MessageKind.STAGE_RESULT,
                 content="Agent initialized with EmptyDiffAgentImplementation",
-                agent_state=request.agent_state or {},
-                unifiedDiff=""
+                agent_state=agent_state,
+                unified_diff=""
             )
             
             event = AgentSseEvent(

@@ -60,6 +60,8 @@ async def run_agent[T: AgentInterface](
             tg.start_soon(agent.process, request, event_tx)
             async with event_rx:
                 async for event in event_rx:
+                    # Format SSE event properly with data: prefix and double newline at the end
+                    # This ensures compatibility with SSE standard
                     yield f"data: {event.to_json()}\n\n"
     except* Exception as excgroup:
         for e in excgroup.exceptions:
@@ -75,6 +77,7 @@ async def run_agent[T: AgentInterface](
                     unified_diff=""
                 )
             )
+            # Format error SSE event properly 
             yield f"data: {error_event.to_json()}\n\n"
     finally:
         logger.info(f"Cleaning up agent session for {request.chatbot_id}:{request.trace_id}")
