@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - mock/sdk
+      - feat/dagger-docker
   pull_request:
 
 env:
