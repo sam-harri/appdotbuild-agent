@@ -189,6 +189,12 @@ class AsyncAgentSession(AgentInterface):
         try:
             logger.info(f"Processing request for {self.chatbot_id}:{self.trace_id}")
 
+            # Check if we need to initialize or if this is a continuation with an existing state
+            if request.agent_state:
+                logger.info(f"Continuing with existing state for trace {self.trace_id}")
+            else:
+                logger.info(f"Initializing new session for trace {self.trace_id}")
+                
             # Initialize the FSM with the request data
             await self.initialize_fsm(request.all_messages, request.agent_state)
 
@@ -233,6 +239,10 @@ class AsyncAgentSession(AgentInterface):
             )
             await event_tx.send(error_event)
         finally:
-            logger.info(f"Cleaning up session for trace {self.trace_id}")
-            self.cleanup()
+            if request.agent_state is None:
+                # Only cleanup if this was a new session
+                logger.info(f"Cleaning up new session for trace {self.trace_id}")
+                self.cleanup()
+            else:
+                logger.info(f"Preserving state for continued session {self.trace_id}")
             await event_tx.aclose()
