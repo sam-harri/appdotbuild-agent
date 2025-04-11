@@ -3,8 +3,7 @@ name: Build and Test
 on:
   push:
     branches:
-      - mock/sdk
-      - feat/dagger-docker
+      - main
   pull_request:
 
 env:
