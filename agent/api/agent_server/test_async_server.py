@@ -51,9 +51,10 @@ class AgentApiClient:
                           settings: Optional[Dict[str, Any]] = None) -> Tuple[List[AgentSseEvent], AgentRequest]:
         """Send a message to the agent and return the parsed SSE events"""
         request = self.create_request(message, application_id, trace_id, agent_state, settings)
-
-        url = "/message" if self.base_url else "http://test/message"
-
+        
+        # Use the base_url if provided, otherwise use the EXTERNAL_SERVER_URL env var or fallback to test URL
+        url = "/message" if self.base_url else os.getenv("EXTERNAL_SERVER_URL", "http://test") + "/message"
+        
         response = await self.client.post(
             url,
             json=request.model_dump(by_alias=True),
