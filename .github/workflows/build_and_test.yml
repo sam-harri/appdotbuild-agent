@@ -94,6 +94,7 @@ jobs:
           TAG=${BRANCH_NAME}-${SHORT_SHA}
           echo "Calculated Tag: $TAG"
           echo "image_tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "branch_name=$BRANCH_NAME" >> "$GITHUB_OUTPUT"
 
       - name: Configure AWS Credentials
         if: steps.check_release.outputs.is_release == 'true'
@@ -114,13 +115,14 @@ jobs:
         working-directory: ./agent/
         env:
           IMAGE_TAG: ${{ steps.build_tag.outputs.image_tag }}
+          BRANCH_NAME: ${{ steps.build_tag.outputs.branch_name }}
         run: |
           echo "Building and pushing Docker image with tag: $IMAGE_TAG ..."
           docker buildx build \
             --platform linux/arm64 \
             --target prod \
             -t ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }} \
-            -t ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest \
+            -t ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.BRANCH_NAME }}-latest \
             --push \
             .
           echo "Docker image built and pushed successfully!"
