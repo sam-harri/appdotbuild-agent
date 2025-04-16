@@ -1,3 +1,12 @@
+"""
+Pydantic models for the agent server API.
+
+These models define the data structures for API requests and responses,
+ensuring consistency with the API specification in `agent_api.tsp`.
+They are used by the `async_server.py` for data validation.
+
+Refer to `architecture.puml` for context within the system.
+"""
 from enum import Enum
 import json
 from typing import Dict, List, Optional, Any, Union, Literal, Type, TypeVar

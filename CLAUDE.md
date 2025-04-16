@@ -6,6 +6,8 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 This project implements an AI codegen agent system with various components for handling API interactions, core logic, and specific agent implementations. The system is built primarily in Python with some TypeScript components.
 
+Refer to `agent/architecture.puml` for a visual representation of the system architecture.
+
 ## Project Structure
 
 - `agent` - Contains the main codegen agent code

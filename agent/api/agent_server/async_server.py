@@ -1,3 +1,14 @@
+"""
+FastAPI implementation for the agent server.
+
+This server handles API requests initiated by clients (e.g., test clients),
+coordinates agent logic using components from `core` and specific agent
+implementations like `trpc_agent`. It utilizes `models.py` for
+request/response validation and interacts with LLMs via the `llm` wrappers
+(indirectly through agents).
+
+Refer to `architecture.puml` for a visual overview.
+"""
 from typing import AsyncGenerator
 from contextlib import asynccontextmanager
 
