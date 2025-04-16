@@ -39,6 +39,7 @@ exclude = [
     "node_modules",
     "site-packages",
     "venv",
+    "*.ipynb"
 ]
 
 line-length = 120
@@ -50,3 +51,8 @@ quote-style = "double"
 indent-style = "space"
 skip-magic-trailing-comma = false
 line-ending = "auto"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.11.5",
+]
