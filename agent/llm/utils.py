@@ -6,7 +6,6 @@ import anthropic
 from anthropic import AnthropicBedrock, Anthropic, AsyncAnthropic, AsyncAnthropicBedrock
 from llm.common import AsyncLLM, Message, TextRaw, ToolUse, ThinkingBlock, ContentBlock
 from llm.anthropic_client import AnthropicLLM
-from llm.anthropic_bedrock import AnthropicBedrockLLM
 from llm.cached import CachedLLM, CacheMode
 from log import get_logger
 
@@ -55,8 +54,8 @@ def _guess_llm_backend(model_name: str) -> LLMBackend:
 def get_llm_client(
     backend: Literal["auto"] | LLMBackend = "auto",
     model_name: Literal["sonnet", "haiku"] = "sonnet",
-    cache_mode: CacheMode = "off",
-    cache_path: str = os.path.join(os.path.dirname(__file__), "../../../anthropic_cache.json"),
+    cache_mode: CacheMode = "auto",
+    cache_path: str = os.path.join(os.path.dirname(__file__), "../../../llm_cache.json"),
     client_params: dict | None = None,
 ) -> AsyncLLM:
     """Get a configured LLM client for the fullstack application.
@@ -102,16 +101,17 @@ def get_llm_client(
         },
     }
 
+    chosen_model = models_map[model_name][backend]
+
     match backend:
         case "bedrock":
             base_client = AsyncAnthropicBedrock(**client_params)
-            client = AnthropicBedrockLLM(base_client)
         case "anthropic":
             base_client = AsyncAnthropic(**client_params)
-            client = AnthropicLLM(base_client)
         case _:
             raise ValueError(f"Unknown backend: {backend}")
 
+    client = AnthropicLLM(base_client, default_model=chosen_model)
     if cache_mode != "off":
         client = CachedLLM(client, cache_mode, cache_path)
 
