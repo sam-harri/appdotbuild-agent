@@ -1,8 +1,10 @@
 import pytest
 import tempfile
-from llm.cached import CachedLLM
-from llm.utils import get_llm_client
-from llm.common import Message, TextRaw
+from llm.cached import CachedLLM, AsyncLLM
+from llm.common import Message, TextRaw, Completion, Tool
+import uuid
+import ujson as json
+
 
 pytestmark = pytest.mark.anyio
 
@@ -12,9 +14,38 @@ def anyio_backend():
     return 'asyncio'
 
 
+class StubLLM(AsyncLLM):
+    def __init__(self):
+        self.calls = 0
+
+    async def completion(
+        self,
+        messages: list[Message],
+        max_tokens: int,
+        model: str | None = None,
+        temperature: float = 1.0,
+        tools: list[Tool] | None = None,
+        tool_choice: str | None = None,
+        system_prompt: str | None = None,
+        *args,
+        **kwargs,
+    ) -> Completion:
+
+        random_str = uuid.uuid4().hex
+        self.calls += 1
+        return Completion(
+            role="assistant",
+            content=[TextRaw(text=random_str)],
+            input_tokens=1,
+            output_tokens=10,
+            stop_reason="end_turn",
+            thinking_tokens=0,
+        )
+
+
 async def test_cached_llm():
     with tempfile.NamedTemporaryFile(delete_on_close=False) as tmp_file:
-        base_llm = get_llm_client(cache_mode="off", model_name="haiku")
+        base_llm = StubLLM()
         record_llm = CachedLLM(
             client=base_llm,
             cache_mode="record",
@@ -27,12 +58,55 @@ async def test_cached_llm():
         }
 
         recorded = await record_llm.completion(**call_args)
-
         replay_llm = CachedLLM(
             client=base_llm,
             cache_mode="replay",
             cache_path=tmp_file.name,
         )
         replayed = await replay_llm.completion(**call_args)
-
+        assert base_llm.calls == 1, "Base LLM should be called once"
         assert recorded == replayed
+
+
+
+async def test_cached_lru():
+    with tempfile.NamedTemporaryFile(delete_on_close=False) as tmp_file:
+        base_llm = StubLLM()
+        record_llm = CachedLLM(
+            client=base_llm,
+            cache_mode="lru",
+            cache_path=tmp_file.name,
+            max_cache_size=2,
+        )
+
+        requests = {
+            key: {
+                "messages": [Message(role="user", content=[TextRaw(str(i + 1))])],
+                "max_tokens": 100,
+            }
+            for i, key in enumerate(["first", "second", "third"])
+        }
+        responses = {}
+
+        for key, call_args in requests.items():
+            resp = await record_llm.completion(**call_args)
+            responses[key] = json.dumps(resp.to_dict())
+
+        assert base_llm.calls == 3, "Base LLM should be called three times"
+
+        # Check that the first request was evicted from the cache
+        assert len(record_llm._cache_lru) == 2, "Cache should contain only the last two requests"
+
+        # 2 and 3 should be in the cache
+        new_resp = await record_llm.completion(**requests["second"])
+        assert json.dumps(new_resp.to_dict()) == responses["second"], "Second request should hit the cache"
+
+        new_resp = await record_llm.completion(**requests["third"])
+        assert json.dumps(new_resp.to_dict()) == responses["third"], "Third request should hit the cache"
+
+        assert base_llm.calls == 3, "Base LLM should still be called three times"
+
+        # check call to first is not in cache
+        new_resp = await record_llm.completion(**requests["first"])
+        assert json.dumps(new_resp.to_dict()) != responses["first"], "First request should not hit the cache"
+        assert base_llm.calls == 4, "Base LLM should still be called four times"
