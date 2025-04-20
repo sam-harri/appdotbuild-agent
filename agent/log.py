@@ -4,7 +4,6 @@ Global logging setup for the agent system.
 Provides a centralized logging configuration used by various components
 (Api, Core, TrpcAgent, LLM, Test Clients) as indicated in the architecture diagram.
 """
-import watchtower
 import logging
 import logging.handlers
 import logging.config
@@ -33,36 +32,6 @@ def _init_logging():
     console = logging.StreamHandler()
     console.setFormatter(_FORMATTER)
     handlers['console'] = console
-
-    # CloudWatch handler
-    if os.getenv("LOG_TO_CLOUDWATCH", ""):
-        try:
-            session = boto3.Session()
-            # for local dev, it would require using boto3.Session(profile_name="dev")
-            cli = session.client("logs", region_name=os.getenv("AWS_REGION", "us-west-2"))
-            cloudwatch = watchtower.CloudWatchLogHandler(
-                log_group_name="codegen-logs",
-                boto3_client=cli,
-                log_stream_name="{machine_name}_{strftime:%m-%d-%y}",
-                use_queues=False,  # this is not performant, but otherwise race conditions occur on uvicorn level
-            )
-            cloudwatch.setFormatter(_FORMATTER)
-            handlers['cloudwatch'] = cloudwatch
-        except NoCredentialsError:
-            logging.warning("CloudWatch credentials not found")
-        except Exception:
-            logging.exception("CloudWatch logging disabled")
-
-    # File handler
-    if log_dir := os.getenv("LOG_DIR", ""):
-        os.makedirs(log_dir, exist_ok=True)
-        file_handler = logging.handlers.RotatingFileHandler(
-            filename=os.path.join(log_dir, f'server_{datetime.now().strftime("%Y%m%d")}.log'),
-            maxBytes=10 * 1024 * 1024,  # 10 MB
-            backupCount=5
-        )
-        file_handler.setFormatter(_FORMATTER)
-        handlers['file'] = file_handler
 
     # Configure the root logger with these handlers
     for handler in handlers.values():

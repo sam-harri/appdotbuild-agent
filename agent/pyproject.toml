@@ -14,7 +14,6 @@ dependencies = [
     "sentry-sdk>=2.25.1",
     "ujson>=5.10.0",
     "uvicorn==0.34.0",
-    "watchtower>=3.4.0",
 ]
 
 [build-system]
