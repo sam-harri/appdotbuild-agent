@@ -26,7 +26,7 @@ class CachedLLM(AsyncLLM):
         client: AsyncLLM,
         cache_mode: CacheMode = "off",
         cache_path: str = "llm_cache.json",
-        max_cache_size: int = 100,
+        max_cache_size: int = 256,
     ):
         self.client = client
         match cache_mode:
