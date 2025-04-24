@@ -3,7 +3,7 @@ from typing import Dict, Any, Optional, TypedDict, List
 
 from anyio.streams.memory import MemoryObjectSendStream
 
-from trpc_agent.application import FSMApplication
+from trpc_agent.application import FSMApplication, FSMState
 from llm.utils import AsyncLLM, get_llm_client
 from llm.common import Message, TextRaw
 from api.fsm_tools import FSMToolProcessor
@@ -45,11 +45,31 @@ class TrpcAgentSession(AgentInterface):
             case None:
                 raise ValueError("FSMApplication is None")
             case FSMApplication():
-                ctx = fsm_app.fsm.context
+                # We intentionally generate the diff against an *empty* snapshot.
+                # Passing the current files as the snapshot results in an empty diff
+                # (because the snapshot and the final state are identical).
+                # Using an empty snapshot correctly produces a diff that contains
+                # all files that have been generated or modified in the current
+                # FSM state.
+                snapshot: dict[str, str] = {}
 
-        files = fsm_app.get_files_at_root(ctx)
-        diff = await fsm_app.get_diff_with(files)
-        return diff
+        logger.info(
+            "Generating diff with %s files in state %s compared to empty snapshot",
+            len(fsm_app.get_files_at_root(fsm_app.fsm.context)),
+            fsm_app.current_state,
+        )
+
+        try:
+            diff = await fsm_app.get_diff_with(snapshot)
+            # Log the diff length to help diagnose issues
+            if diff:
+                logger.info("Generated diff with length %d", len(diff))
+            else:
+                logger.warning("Generated empty diff")
+            return diff
+        except Exception as e:
+            logger.exception(f"Error generating diff: {e}")
+            return f"Error generating diff: {e}"
 
     @staticmethod
     def user_answered(messages: List[Message]) -> bool:
@@ -99,13 +119,13 @@ class TrpcAgentSession(AgentInterface):
                 else:
                     fsm_state = await self.processor_instance.fsm_app.fsm.dump()
                     app_diff = await self.get_app_diff()
-
+                    # include empty diffs too as they are valid = template diff
                 messages += new_messages
                 event_out = AgentSseEvent(
                     status=AgentStatus.IDLE,
                     traceId=self.trace_id,
                     message=AgentMessage(
-                        role="agent",
+                        role="assistant",
                         kind=MessageKind.STAGE_RESULT if self.user_answered(messages) else MessageKind.REFINEMENT_REQUEST,
                         content=json.dumps([x.to_dict() for x in messages] ),
                         agentState={"fsm_state": fsm_state} if fsm_state else None,
@@ -121,6 +141,38 @@ class TrpcAgentSession(AgentInterface):
                         fsm_app = self.processor_instance.fsm_app
                         is_completed = fsm_app.is_completed
 
+                # If the FSM is completed, ensure the diff is sent properly
+                if is_completed:
+                    try:
+                        # This is the final state - make sure we produce a proper diff
+                        if self.processor_instance.fsm_app and self.processor_instance.fsm_app.current_state == FSMState.COMPLETE:
+                            logger.info(f"Sending final state diff for trace {self.trace_id}")
+                            
+                            # We purposely generate diff against an empty snapshot to ensure
+                            # that *all* generated files are included in the final diff. Using
+                            # the current files as the snapshot would yield an empty diff.
+                            final_diff = await self.processor_instance.fsm_app.get_diff_with({})
+                            
+                            # Always include a diff in the final state, even if empty
+                            if not final_diff:
+                                final_diff = "# Note: This is a valid empty diff (means no changes from template)"
+                            
+                            completion_event = AgentSseEvent(
+                                status=AgentStatus.IDLE,
+                                traceId=self.trace_id,
+                                message=AgentMessage(
+                                    role="assistant",
+                                    kind=MessageKind.STAGE_RESULT,
+                                    content=json.dumps([x.to_dict() for x in messages]),
+                                    agentState={"fsm_state": fsm_state} if fsm_state else None,
+                                    unifiedDiff=final_diff
+                                )
+                            )
+                            logger.info(f"Sending completion event with diff (length: {len(final_diff)})")
+                            await event_tx.send(completion_event)
+                    except Exception as e:
+                        logger.exception(f"Error sending final diff: {e}")
+
                 if not self.user_answered(new_messages) or is_completed:
                     break
 
@@ -131,7 +183,7 @@ class TrpcAgentSession(AgentInterface):
                 status=AgentStatus.IDLE,
                 traceId=self.trace_id,
                 message=AgentMessage(
-                    role="agent",
+                    role="assistant",
                     kind=MessageKind.RUNTIME_ERROR,
                     content=f"Error processing request: {str(e)}",
                     agentState=None,

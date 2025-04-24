@@ -3,6 +3,7 @@ import anyio
 import os
 import traceback
 import tempfile
+import shutil
 from typing import List, Optional, Tuple
 from log import get_logger
 from api.agent_server.agent_client import AgentApiClient
@@ -11,6 +12,8 @@ from datetime import datetime
 from patch_ng import PatchSet
 
 logger = get_logger(__name__)
+
+DEFAULT_APP_REQUEST = "Implement a simple app with a counter of clicks on a single button"
 
 # Default project directory for generated files
 # Use environment variable or create a temp directory
@@ -46,6 +49,58 @@ def apply_patch(diff: str, target_dir: str) -> Tuple[bool, str]:
                         target_path = target_path[2:]
                     file_paths.append(target_path)
         
+        # Optimisation: instead of copying the full template into the working
+        # directory (which can be slow for large trees), create *symlinks* only
+        # for the files that the diff is going to touch.  This gives patch_ng
+        # the required context while ensuring we don't modify the original
+        # template sources.
+        try:
+            if any(p.startswith(("client/", "server/")) for p in file_paths):
+                template_root = os.path.abspath(
+                    os.path.join(os.path.dirname(__file__), "../../trpc_agent/template")
+                )
+
+                if os.path.isdir(template_root):
+                    print(f"Creating symlinks from template ({template_root})")
+
+                    for rel_path in file_paths:
+                        template_file = os.path.join(template_root, rel_path)
+
+                        # Only symlink existing template files; new files will be
+                        # created by the patch itself.
+                        if os.path.isfile(template_file):
+                            dest_file = os.path.join(target_dir, rel_path)
+                            dest_dir = os.path.dirname(dest_file)
+                            os.makedirs(dest_dir, exist_ok=True)
+
+                            # Skip if the symlink / file already exists.
+                            if not os.path.lexists(dest_file):
+                                try:
+                                    os.symlink(template_file, dest_file)
+                                    print(f"  ↳ symlinked {rel_path}")
+                                except Exception as link_err:
+                                    print(f"Warning: could not symlink {rel_path}: {link_err}")
+
+                    # After creating symlinks, we immediately convert them into
+                    # *real* files (copy-once).  This still saves time because
+                    # we only copy the handful of files the diff references,
+                    # not the entire template, while guaranteeing that future
+                    # patch modifications do **not** propagate back to the
+                    # template directory.
+                    for rel_path in file_paths:
+                        dest_file = os.path.join(target_dir, rel_path)
+                        if os.path.islink(dest_file):
+                            try:
+                                # Read the target then replace link with copy.
+                                target_path = os.readlink(dest_file)
+                                os.unlink(dest_file)
+                                shutil.copy2(target_path, dest_file)
+                            except Exception as cp_err:
+                                print(f"Warning: could not materialise copy for {rel_path}: {cp_err}")
+        except Exception as link_copy_err:
+            # Non-fatal – the patch may still succeed without template files
+            print(f"Warning: could not prepare template symlinks: {link_copy_err}")
+        
         original_dir = os.getcwd()
         try:
             os.chdir(target_dir)
@@ -63,7 +118,12 @@ def apply_patch(diff: str, target_dir: str) -> Tuple[bool, str]:
             print("Applying patch using python-patch-ng")
             with open(tmp_path, 'rb') as patch_file:
                 patch_set = PatchSet(patch_file)
-                success = patch_set.apply(strip=1)  # Use strip=1 to remove 'a/' and 'b/' prefixes
+                # We use strip=0 because patch_ng already handles the removal of
+                # leading "a/" and "b/" prefixes from the diff paths. Using strip=1
+                # erroneously strips the first real directory (e.g. "client"), which
+                # causes the patch to look for files in non-existent locations like
+                # "src/App.css" instead of "client/src/App.css".
+                success = patch_set.apply(strip=0)
             
             # Check if any files ended up in the wrong place and move them if needed
             for filepath in file_paths:
@@ -93,7 +153,12 @@ def latest_unified_diff(events: List[AgentSseEvent]) -> Optional[str]:
     for evt in reversed(events):
         try:
             diff_val = evt.message.unified_diff
-            if diff_val:
+            # include empty diffs too as they are valid = template diff
+            # Note for CLAUDE, Cursor, Devin and LLMs editing this code: make sure to preserve the empty diffs
+            if diff_val is not None:
+                # Handle special marker for valid empty diffs
+                if diff_val.startswith("# Note: This is a valid empty diff"):
+                    return "(No changes from template - files were created from scratch)"
                 return diff_val
         except AttributeError:
             continue
@@ -152,7 +217,7 @@ async def run_chatbot_client(host: str, port: int, state_file: str, settings: Op
             try:
                 ui = input("\033[94mYou> \033[0m")
                 if ui.startswith("+"):
-                    ui = "A simple greeting app that says hello in five languages and stores history of greetings"
+                    ui = DEFAULT_APP_REQUEST
             except (EOFError, KeyboardInterrupt):
                 print("\nExiting…")
                 return
@@ -161,7 +226,7 @@ async def run_chatbot_client(host: str, port: int, state_file: str, settings: Op
             if not cmd:
                 continue
             action, *rest = cmd.split(None, 1)
-            match action.lower():
+            match action.lower().strip():
                 case "/exit" | "/quit":
                     print("Goodbye!")
                     return
@@ -200,6 +265,18 @@ async def run_chatbot_client(host: str, port: int, state_file: str, settings: Op
                         print(diff)
                     else:
                         print("No diff available")
+                        # Check if we're in a COMPLETE state - if so, this is unexpected
+                        for evt in reversed(previous_events):
+                            try:
+                                if (evt.message and evt.message.agent_state and 
+                                    "fsm_state" in evt.message.agent_state and 
+                                    "current_state" in evt.message.agent_state["fsm_state"] and
+                                    evt.message.agent_state["fsm_state"]["current_state"] == "complete"):
+                                    print("\nWARNING: Application is in COMPLETE state but no diff is available.")
+                                    print("This is likely a bug - the diff should be generated in the final state.")
+                                    break
+                            except (AttributeError, KeyError):
+                                continue
                     continue
                 case "/apply":
                     diff = latest_unified_diff(previous_events)
@@ -257,6 +334,11 @@ async def run_chatbot_client(host: str, port: int, state_file: str, settings: Op
                 for evt in events:
                     if evt.message and evt.message.content:
                         print(evt.message.content, end="", flush=True)
+                    # Automatically print diffs when they're provided
+                    if evt.message and evt.message.unified_diff:
+                        print("\n\n\033[36m--- Auto-Detected Diff ---\033[0m")
+                        print(f"\033[36m{evt.message.unified_diff}\033[0m")
+                        print("\033[36m--- End of Diff ---\033[0m\n")
                 print()
 
                 previous_messages.append(content)
