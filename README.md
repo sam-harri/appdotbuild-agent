@@ -63,37 +63,17 @@ The framework exposes four high-level tools for LLM-guided application generatio
    Input: {}
    ```
 
-## Environment Variables
+### Testing with debug client on prod servers
 
-```env
-DATABASE_URL=postgresql://user:password@localhost:5432/dbname
-AWS_PROFILE=dev
-AWS_REGION=us-west-2
-```
+1. Make sure you have the `uv` package installed (https://docs.astral.sh/uv/getting-started/installation/)
+2. `uv run agent/api/agent_server/agent_api_client.py --host prod-agent-service-alb-999031216.us-west-2.elb.amazonaws.com --port 80` (or change the host if needed);
+3. In the client, prompt for your app.
+4. Waste some time, get some tea.
+5. After getting a large output, use `/apply`
+6. There will be a new dir in the output, open new tab and `cd` there.
+7. `docker compose up`. Optionally you can use your other DB: set env variable `DATABASE_URL=<your_db_url>`; otherwise we use postgres in docker.
+8. Go to `localhost:80`
 
-### Testing in Debug Client against Prod
-
-```
-cd agent
-TEST_EXTERNAL_SERVER=true EXTERNAL_SERVER_URL=http://prod-agent-service-alb-999031216.us-west-2.elb.amazonaws.com python api/agent_server/agent_api_client.py --host="prod-agent-service-alb-999031216.us-west-2.elb.amazonaws.com" --port=80
-```
-
-### Testing Locally in Dbug Client
-
-```
-cd agent
-python api/agent_server/agent_api_client.py
-```
-
-### Run Generated App
-
-```
-DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres && bun run --filter app-build-server db:push
-
-bun install
-
-DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres && bun run dev:all
-```
 
 ### VCR Testing
 
