@@ -31,13 +31,8 @@ In case of access issues, make sure you have access to the AWS sandbox account.
 3. For local development:
 ```bash
 export AWS_PROFILE=dev
+export AWS_REGION="us-west-2"
 ```
-
-4. For running compilation in containers, first run:
-```bash
-./agent/prepare_containers.sh
-```
-DockerSandboxTest python notebook contains sample usage.
 
 ## Basic Usage
 
@@ -74,6 +69,13 @@ The framework exposes four high-level tools for LLM-guided application generatio
 DATABASE_URL=postgresql://user:password@localhost:5432/dbname
 AWS_PROFILE=dev
 AWS_REGION=us-west-2
+```
+
+### Testing in Debug Client against Prod
+
+```
+cd agent
+TEST_EXTERNAL_SERVER=true EXTERNAL_SERVER_URL=http://prod-agent-service-alb-999031216.us-west-2.elb.amazonaws.com python api/agent_server/agent_api_client.py --host="prod-agent-service-alb-999031216.us-west-2.elb.amazonaws.com" --port=80
 ```
 
 ### VCR Testing
