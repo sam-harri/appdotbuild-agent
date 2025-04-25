@@ -78,6 +78,23 @@ cd agent
 TEST_EXTERNAL_SERVER=true EXTERNAL_SERVER_URL=http://prod-agent-service-alb-999031216.us-west-2.elb.amazonaws.com python api/agent_server/agent_api_client.py --host="prod-agent-service-alb-999031216.us-west-2.elb.amazonaws.com" --port=80
 ```
 
+### Testing Locally in Dbug Client
+
+```
+cd agent
+python api/agent_server/agent_api_client.py
+```
+
+### Run Generated App
+
+```
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres && bun run --filter app-build-server db:push
+
+bun install
+
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres && bun run dev:all
+```
+
 ### VCR Testing
 
 We use VCR for testing LLM calls. VCR records LLM completions and saves them to a cache file, allowing us to replay them in tests. This is useful for testing LLM interactions without making real API calls.
