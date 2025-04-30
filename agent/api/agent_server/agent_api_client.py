@@ -764,7 +764,7 @@ def cli(host: str = "",
             )
             host = "localhost"
             port = 8001
-            print(f"Local server started, pid {codegen_proc.pid}, stderr: {std_err_file.name}")
+            print(f"Local server started, pid {codegen_proc.pid}, check `tail -f {std_err_file.name}` for logs")
 
         anyio.run(run_chatbot_client, host, port, state_file, backend="asyncio")
     finally:

@@ -50,7 +50,7 @@ async def run_e2e(prompt: str, standalone: bool):
 
                 logger.info(f"Starting Docker containers in {temp_dir}")
                 res = subprocess.run(
-                    ["docker", "compose", "up", "-d"],
+                    ["docker", "compose", "-p", generate_random_name("e2e"), "up", "-d"],
                     check=False,
                     capture_output=True,
                     text=True
