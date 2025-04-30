@@ -3,7 +3,6 @@ import uuid
 import dagger
 from dagger import dag, function, object_type, Container, Directory, ReturnType
 
-
 class ExecResult:
     exit_code: int
     stdout: str
