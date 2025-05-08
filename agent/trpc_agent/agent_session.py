@@ -215,7 +215,9 @@ Return ONLY the commit message, nothing else.""")
                     traceId=self.trace_id,
                     message=AgentMessage(
                         role="assistant",
-                        kind=MessageKind.REFINEMENT_REQUEST if self.processor_instance.fsm_app is None else MessageKind.STAGE_RESULT,
+                        kind=MessageKind.STAGE_RESULT if (self.user_answered(messages) or 
+                                                         (self.processor_instance.fsm_app and 
+                                                          app_diff is not None)) else MessageKind.REFINEMENT_REQUEST,
                         content=json.dumps([x.to_dict() for x in messages], sort_keys=True),
                         agentState={"fsm_state": fsm_state} if fsm_state else None,
                         unifiedDiff=app_diff,
