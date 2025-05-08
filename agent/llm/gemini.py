@@ -4,7 +4,6 @@ from google import genai
 from google.genai import types as genai_types
 import os
 from llm import common
-import anyio
 from log import get_logger
 
 logger = get_logger(__name__)
@@ -33,6 +32,7 @@ class GeminiLLM(common.AsyncLLM):
         tool_choice: str | None = None,
         system_prompt: str | None = None,
         force_tool_use: bool = False,
+        attach_files: list[str] | None = None,
         *args, # consume unused args passed down
         **kwargs, # consume unused kwargs passed down
     ) -> common.Completion:
@@ -59,10 +59,12 @@ class GeminiLLM(common.AsyncLLM):
                         allowed_function_names=[tool_choice] if tool_choice else None,
                     )
                 )
+
+        gemini_messages = await self._messages_into(messages, attach_files)
         while True:
             response = await self._async_client.models.generate_content(
                 model=self.model_name,
-                contents=self._messages_into(messages),
+                contents=gemini_messages,
                 config=config,
             )
             try:
@@ -72,6 +74,15 @@ class GeminiLLM(common.AsyncLLM):
                     continue
                 raise e
         return self._completion_from(response)
+
+    async def upload_files(self, files: List[str]) -> List[genai_types.File]:
+        result = []
+        for f in files:
+            if not os.path.exists(f):
+                raise FileNotFoundError(f"File {f} does not exist")
+            uploaded = await self._async_client.files.upload(file=f)
+            result.append(uploaded)
+        return result
 
     @staticmethod
     def _completion_from(completion: genai_types.GenerateContentResponse) -> common.Completion:
@@ -131,8 +142,7 @@ class GeminiLLM(common.AsyncLLM):
                     return False
         return False
 
-    @staticmethod
-    def _messages_into(messages: list[common.Message]) -> List[genai_types.Content]:
+    async def _messages_into(self, messages: list[common.Message], files: List[str] | None) -> List[genai_types.Content]:
         theirs_messages: List[genai_types.Content] = []
         for message in messages:
             theirs_parts: List[genai_types.Part] = []
@@ -150,16 +160,26 @@ class GeminiLLM(common.AsyncLLM):
                 parts=theirs_parts,
                 role=message.role if message.role == "user" else "model"
             ))
+
+        if files:
+            uploaded = await self.upload_files(files)
+            files_parts = [
+                genai_types.Part.from_uri(
+                    file_uri=file.uri,
+                    mime_type=file.mime_type,
+                )
+                for file in uploaded
+                if file.uri and file.mime_type
+            ]
+
+            match theirs_messages[-1].parts:
+                case list():
+                    # Add files to the last message
+                    theirs_messages[-1].parts.extend(files_parts)
+                case None:
+                    # If the last message is None, create a new one
+                    theirs_messages.append(genai_types.Content(
+                        parts=files_parts,
+                        role="user"
+                    ))
         return theirs_messages
-
-
-async def main():
-    gemini_llm = GeminiLLM("gemini-2.5-flash-preview-04-17")
-    messages = [
-        common.Message(role="user", content=[common.TextRaw("Hello, how are you?")]),
-    ]
-    response = await gemini_llm.completion(messages, max_tokens=1024)
-    print(response)
-
-if __name__ == "__main__":
-    anyio.run(main)
