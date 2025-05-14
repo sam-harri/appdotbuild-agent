@@ -75,7 +75,7 @@ def check_dagger_available():
     except (ImportError, Exception) as e:
         pytest.skip(f"Docker/Dagger not available: {str(e)}")
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_get_diff_with_empty_snapshot(check_dagger_available):
     """
     Test get_diff_with with an empty snapshot (complete template scenario)
@@ -108,7 +108,7 @@ async def test_get_diff_with_empty_snapshot(check_dagger_available):
         # The template typically includes common files like Dockerfile and package.json
         assert "Dockerfile" in diff_result
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_get_diff_with_identical_snapshot(check_dagger_available):
     """
     Test get_diff_with when snapshot is identical to FSM files
@@ -138,7 +138,7 @@ async def test_get_diff_with_identical_snapshot(check_dagger_available):
         assert "+Hello, world!" not in diff_result
         assert "+function App()" not in diff_result
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_get_diff_with_modified_files(check_dagger_available):
     """
     Test get_diff_with when files are modified between snapshot and FSM
@@ -175,7 +175,7 @@ async def test_get_diff_with_modified_files(check_dagger_available):
         assert "Original App" in diff_result
         assert "Hello, modified world" in diff_result
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_get_diff_with_added_files(check_dagger_available):
     """
     Test get_diff_with when files are added in FSM compared to snapshot
@@ -214,7 +214,7 @@ async def test_get_diff_with_added_files(check_dagger_available):
         assert "client/src/App.tsx" in diff_result
         assert "server/index.js" in diff_result
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_get_diff_with_removed_files(check_dagger_available):
     """
     Test get_diff_with when files are removed in FSM compared to snapshot
@@ -256,7 +256,7 @@ async def test_get_diff_with_removed_files(check_dagger_available):
         # So we don't check for specific removal markers as they might not be
         # prominently featured in the diff output
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_get_diff_with_exception_handling(check_dagger_available):
     """Test error handling when something goes wrong during diff generation"""
     # Create a mock FSM application
@@ -272,7 +272,7 @@ async def test_get_diff_with_exception_handling(check_dagger_available):
             assert "ERROR GENERATING DIFF" in diff_result
             assert "Test diff error" in diff_result
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_get_diff_with_real_dagger():
     """Integration test with a real Dagger instance (requires Dagger to be available)"""
     # Skip this test by default since it requires Docker/Dagger
