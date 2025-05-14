@@ -33,6 +33,11 @@ def _extend_dagger_shutdown_timeout():
     yield
     _dagger_session.Pclose.timeout = original
 
+
+@pytest.fixture(scope="function")
+def anyio_backend():
+    return 'asyncio'
+
 class MockApplicationContext:
     """Mock context for testing FSMApplication"""
     def __init__(self, files=None):
