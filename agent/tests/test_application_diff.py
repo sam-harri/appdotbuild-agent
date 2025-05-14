@@ -88,7 +88,7 @@ async def test_get_diff_with_empty_snapshot(check_dagger_available):
         "server/index.js": "console.log('Server starting');"
     }
     
-    async with dagger.connection():
+    async with dagger.connection(dagger.Config(execute_timeout=900)):
         # Create FSM application with our test files
         fsm_application = FSMApplication(create_mock_fsm(fsm_files))
         
@@ -120,7 +120,7 @@ async def test_get_diff_with_identical_snapshot(check_dagger_available):
         "client/src/App.tsx": "function App() { return <div>Test App</div>; }"
     }
     
-    async with dagger.connection():
+    async with dagger.connection(dagger.Config(execute_timeout=900)):
         # Create FSM application with our test files
         fsm_application = FSMApplication(create_mock_fsm(test_files))
         
@@ -156,7 +156,7 @@ async def test_get_diff_with_modified_files(check_dagger_available):
         "client/src/App.tsx": "function App() { return <div>Modified App</div>; }"
     }
     
-    async with dagger.connection():
+    async with dagger.connection(dagger.Config(execute_timeout=900)):
         # Create FSM application with our modified files
         fsm_application = FSMApplication(create_mock_fsm(fsm_files))
         
@@ -193,7 +193,7 @@ async def test_get_diff_with_added_files(check_dagger_available):
         "server/index.js": "console.log('Server starting');"
     }
     
-    async with dagger.connection():
+    async with dagger.connection(dagger.Config(execute_timeout=900)):
         # Create FSM application with our expanded files
         fsm_application = FSMApplication(create_mock_fsm(fsm_files))
         
@@ -234,7 +234,7 @@ async def test_get_diff_with_removed_files(check_dagger_available):
         "client/src/App.tsx": "function App() { return <div>App</div>; }",
     }
 
-    async with dagger.connection():
+    async with dagger.connection(dagger.Config(execute_timeout=900)):
         # Create FSM application with our reduced files
         fsm_application = FSMApplication(create_mock_fsm(fsm_files))
 
@@ -263,7 +263,7 @@ async def test_get_diff_with_exception_handling(check_dagger_available):
     fsm_application = FSMApplication(create_mock_fsm())
     
     # Use a real Dagger connection but create conditions that will cause an error
-    async with dagger.connection():
+    async with dagger.connection(dagger.Config(execute_timeout=900)):
         # Call get_diff_with but cause an exception in the Workspace.diff method
         with patch.object(Workspace, 'diff', side_effect=Exception("Test diff error")):
             diff_result = await fsm_application.get_diff_with({})
@@ -277,7 +277,7 @@ async def test_get_diff_with_real_dagger():
     """Integration test with a real Dagger instance (requires Dagger to be available)"""
     # Skip this test by default since it requires Docker/Dagger
     try:
-        async with dagger.connection():
+        async with dagger.connection(dagger.Config(execute_timeout=900)):
             # Create FSM application
             fsm_application = FSMApplication(create_mock_fsm())
             
