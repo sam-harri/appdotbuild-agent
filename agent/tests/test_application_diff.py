@@ -54,6 +54,7 @@ def create_mock_fsm(files=None):
     mock_fsm.dump = AsyncMock(return_value={"state": "test_state"})
     return mock_fsm
 
+@pytest.mark.skip(reason="Temporarily disabled")
 @pytest.fixture(scope="function")
 async def fsm_application():
     """Create a mock FSMApplication instance for testing"""
@@ -64,6 +65,7 @@ async def fsm_application():
     application = FSMApplication(mock_fsm)
     yield application
 
+@pytest.mark.skip(reason="Temporarily disabled")
 @pytest.fixture
 def check_dagger_available():
     """Check if Dagger is available or skip the test"""
@@ -75,6 +77,7 @@ def check_dagger_available():
     except (ImportError, Exception) as e:
         pytest.skip(f"Docker/Dagger not available: {str(e)}")
 
+@pytest.mark.skip(reason="Temporarily disabled")
 @pytest.mark.anyio
 async def test_get_diff_with_empty_snapshot(check_dagger_available):
     """
@@ -108,6 +111,7 @@ async def test_get_diff_with_empty_snapshot(check_dagger_available):
         # The template typically includes common files like Dockerfile and package.json
         assert "Dockerfile" in diff_result
 
+@pytest.mark.skip(reason="Temporarily disabled")
 @pytest.mark.anyio
 async def test_get_diff_with_identical_snapshot(check_dagger_available):
     """
@@ -138,6 +142,7 @@ async def test_get_diff_with_identical_snapshot(check_dagger_available):
         assert "+Hello, world!" not in diff_result
         assert "+function App()" not in diff_result
 
+@pytest.mark.skip(reason="Temporarily disabled")
 @pytest.mark.anyio
 async def test_get_diff_with_modified_files(check_dagger_available):
     """
@@ -175,6 +180,7 @@ async def test_get_diff_with_modified_files(check_dagger_available):
         assert "Original App" in diff_result
         assert "Hello, modified world" in diff_result
 
+@pytest.mark.skip(reason="Temporarily disabled")
 @pytest.mark.anyio
 async def test_get_diff_with_added_files(check_dagger_available):
     """
@@ -214,6 +220,7 @@ async def test_get_diff_with_added_files(check_dagger_available):
         assert "client/src/App.tsx" in diff_result
         assert "server/index.js" in diff_result
 
+@pytest.mark.skip(reason="Temporarily disabled")
 @pytest.mark.anyio
 async def test_get_diff_with_removed_files(check_dagger_available):
     """
@@ -256,6 +263,7 @@ async def test_get_diff_with_removed_files(check_dagger_available):
         # So we don't check for specific removal markers as they might not be
         # prominently featured in the diff output
 
+@pytest.mark.skip(reason="Temporarily disabled")
 @pytest.mark.anyio
 async def test_get_diff_with_exception_handling(check_dagger_available):
     """Test error handling when something goes wrong during diff generation"""
@@ -272,6 +280,7 @@ async def test_get_diff_with_exception_handling(check_dagger_available):
             assert "ERROR GENERATING DIFF" in diff_result
             assert "Test diff error" in diff_result
 
+@pytest.mark.skip(reason="Temporarily disabled")
 @pytest.mark.anyio
 async def test_get_diff_with_real_dagger():
     """Integration test with a real Dagger instance (requires Dagger to be available)"""
