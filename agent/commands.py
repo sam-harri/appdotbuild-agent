@@ -20,7 +20,7 @@ def _n_workers():
 
 
 def _run_tests_with_cache(dest=".", n_workers=_n_workers(), verbose=False, exclude: str | None = None):
-    os.environ["LLM_VCR_CACHE_MODE"] = "replay"
+    os.environ["LLM_VCR_CACHE_MODE"] = "lru"
     os.chdir(_current_dir())
     flag = "-vs" if verbose else "-v"
     params = [flag, "-n", str(n_workers), dest]
