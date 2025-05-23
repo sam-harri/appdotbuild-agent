@@ -46,7 +46,7 @@ lint = "Runs ruff to check and fix linting issues. Example: uv run lint"
 type_check = "Runs type checking with pyright. Example: uv run type_check"
 format = "Runs ruff to format code, optionally accepts target. Example: uv run format [file.py]"
 generate = "Generates code based on a prompt. Example: uv run generate --prompt='your app description'"
-interactive = "Starts an interactive CLI session with the agent. Example: uv run interactive"
+interactive = "Starts an interactive CLI session with the agent. Examples: uv run interactive (local server), uv run interactive --host=prod-agent-service-alb-999031216.us-west-2.elb.amazonaws.com --port=80 (remote server). Make sure to use BUILDER_TOKEN env fvar for access grant."
 help = "Displays this help message. Example: uv run help"
 
 [dependency-groups]
