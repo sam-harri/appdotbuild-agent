@@ -211,6 +211,7 @@ class FSMToolProcessor[T: FSMInterface]:
                 return CommonToolResult(content="No active FSM session", is_error=True)
 
             logger.info("Completing FSM session")
+            await self.fsm_app.complete_fsm()
 
             # Check for errors
             if (error_msg := self.fsm_app.maybe_error()):
@@ -233,7 +234,6 @@ class FSMToolProcessor[T: FSMInterface]:
         }
         response = await llm.completion(messages, **model_args)
         tool_results = []
-        work_in_progress = False
         for block in response.content:
             match block:
                 case TextRaw(text):
@@ -259,19 +259,16 @@ class FSMToolProcessor[T: FSMInterface]:
 
         thread = [Message(role="assistant", content=response.content)]
         if tool_results:
-            work_in_progress = True
-            thread +=  [
-            Message(role="user", content=[
-                *tool_results
-            ]),
-            Message(role="assistant", content=[TextRaw("I will analyze tool result now")])
-            ]
-
-        for res in tool_results:
-            if res.tool_use.name == "complete_fsm" or res.tool_result.is_error:
-                work_in_progress = False
-
-        return thread, FSMStatus.WIP if work_in_progress else FSMStatus.IDLE
+            fsm_status = FSMStatus.WIP
+            thread += [Message(role="user", content=[*tool_results, TextRaw("Analyze tool results.")])]
+        else:
+            if self.fsm_app is None or self.fsm_app.is_completed:
+                fsm_status = FSMStatus.IDLE
+            else:
+                fsm_status = FSMStatus.WIP
+                logger.info("No tool calls with active FSM. Continuing execution.")
+                thread += [Message(role="user", content=[TextRaw("Continue execution.")])]
+        return thread, fsm_status
 
     def fsm_as_result(self) -> dict:
         if self.fsm_app is None:
