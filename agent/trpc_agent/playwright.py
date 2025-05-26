@@ -10,12 +10,33 @@ from trpc_agent import playbooks
 from core.base_node import Node
 from core.workspace import ExecResult
 from core.actors import BaseData
+from core.postgres_utils import create_postgres_service, pg_health_check_cmd
 from llm.common import AsyncLLM, Message, TextRaw, AttachedFiles
 from llm.utils import merge_text
 
 from dagger import dag
+import dagger
 
 logger = logging.getLogger(__name__)
+
+
+async def drizzle_push(ctr: dagger.Container, postgresdb: dagger.Service | None) -> ExecResult:
+    """Run drizzle-kit push with postgres service."""
+
+    if postgresdb is None:
+        postgresdb = create_postgres_service()
+
+    push_ctr = (
+        ctr
+        .with_exec(["apk", "--update", "add", "postgresql-client"])
+        .with_service_binding("postgres", postgresdb)
+        .with_env_variable("APP_DATABASE_URL", "postgres://postgres:postgres@postgres:5432/postgres")
+        .with_exec(pg_health_check_cmd())
+        .with_workdir("server")
+        .with_exec(["bun", "run", "drizzle-kit", "push", "--force"])
+    )
+    result = await ExecResult.from_ctr(push_ctr)
+    return result
 
 
 def extract_tag(source: str | None, tag: str):
@@ -51,6 +72,7 @@ class PlaywrightRunner:
     ) -> tuple[ExecResult, str | None]:
         logger.info("Running Playwright tests")
 
+
         workspace = node.data.workspace
         ctr = workspace.ctr.with_exec(["bun", "install", "."])
 
@@ -59,20 +81,11 @@ class PlaywrightRunner:
                 entrypoint = "dev:client"
                 postgresdb = None
             case "full":
-                # FixMe: this logic belongs to the workspace?
-                postgresdb = (
-                    dag.container()
-                    .from_("postgres:17.0-alpine")
-                    .with_env_variable("POSTGRES_USER", "postgres")
-                    .with_env_variable("POSTGRES_PASSWORD", "postgres")
-                    .with_env_variable("POSTGRES_DB", "postgres")
-                    .as_service(use_entrypoint=True)
-                )
-                push_result = await workspace.exec_with_pg(
-                    ["bun", "run", "drizzle-kit", "push", "--force"], cwd="server"
-                )
+                postgresdb = create_postgres_service()
+                push_result = await drizzle_push(ctr, postgresdb)
                 if push_result.exit_code != 0:
-                    raise RuntimeError(f"Drizzle kit push failed: {push_result.stderr}")
+                    return push_result, f"Drizzle push failed: {push_result.stderr}"
+                logger.info("Drizzle push succeeded")
                 entrypoint = "dev:all"
 
         app_ctr = await ctr.with_entrypoint(["bun", "run", entrypoint]).with_exposed_port(5173)
@@ -81,14 +94,37 @@ class PlaywrightRunner:
             app_ctr = (
                 app_ctr.with_service_binding("postgres", postgresdb)
                 .with_exposed_port(2022)
+                .with_exposed_port(5173)
                 .with_env_variable("APP_DATABASE_URL", "postgres://postgres:postgres@postgres:5432/postgres")
             )
 
-        status = await ExecResult.from_ctr(app_ctr)
-        if status.exit_code != 0:
-            raise RuntimeError(f"Failed to start app: {status.stderr}")
-
+        # start the app as a service
         app_service = app_ctr.as_service()
+
+        # implement health check for backend
+        if mode == "full":
+            logger.info("Waiting for backend service to start...")
+            backend_check = (
+                dag.container()
+                .from_("alpine:latest")
+                .with_exec(["apk", "add", "--no-cache", "curl"])
+                .with_service_binding("app", app_service)
+                .with_exec([
+                    "sh", "-c",
+                    "for i in $(seq 1 30); do "
+                    "curl -f http://app:2022/health 2>/dev/null && exit 0; "
+                    "echo 'Waiting for backend...' && sleep 1; "
+                    "done; exit 1"
+                ])
+            )
+            backend_result = await ExecResult.from_ctr(backend_check)
+            if backend_result.exit_code != 0:
+                return backend_result, f"Backend service failed to start: {backend_result.stderr}"
+
+            logger.info("Backend is ready")
+
+        logger.info("App service is ready")
+
         with ensure_dir(log_dir) as temp_dir:
             result = await node.data.workspace.run_playwright(
                 app_service,
