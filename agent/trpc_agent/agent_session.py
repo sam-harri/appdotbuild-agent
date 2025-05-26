@@ -130,7 +130,7 @@ class TrpcAgentSession(AgentInterface):
                     #TODO: move into FSM in intial state to control this?
                     await self.send_event(
                         event_tx=event_tx,
-                        status=AgentStatus.IDLE,
+                        status=AgentStatus.RUNNING,
                         kind=MessageKind.REVIEW_RESULT,
                         content=messages,
                         fsm_state=fsm_state,
