@@ -135,22 +135,20 @@ async def run_agent[T: AgentInterface](
         async def send_keep_alive():
             try:
                 while keep_alive_running:
-                    await anyio.sleep(30)
-                    
-                    if keep_alive_running:
-                        keep_alive_event = AgentSseEvent(
-                            status=AgentStatus.RUNNING,
-                            traceId=request.trace_id,
-                            message=AgentMessage(
-                                role="assistant",
-                                kind=MessageKind.KEEP_ALIVE,
-                                content="",
-                                agentState=None,
-                                unifiedDiff=None
-                            )
+                    keep_alive_event = AgentSseEvent(
+                        status=AgentStatus.RUNNING,
+                        traceId=request.trace_id,
+                        message=AgentMessage(
+                            role="assistant",
+                            kind=MessageKind.KEEP_ALIVE,
+                            content="",
+                            agentState=None,
+                            unifiedDiff=None
                         )
-                        
-                        await keep_alive_tx.send(keep_alive_event)
+                    )
+                    await keep_alive_tx.send(keep_alive_event)
+                    await anyio.sleep(30)
+
             except Exception:
                 pass
             finally:
