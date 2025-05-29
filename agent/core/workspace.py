@@ -6,6 +6,7 @@ from log import get_logger
 import hashlib
 from core.postgres_utils import create_postgres_service
 from core.dagger_utils import ExecResult
+import uuid
 
 logger = get_logger(name)
 
@@ -39,6 +40,8 @@ class Workspace:
         )
         for cmd in setup_cmd:
             ctr = ctr.with_exec(cmd)
+
+        ctr = ctr.with_env_variable("INSTANCE_ID", uuid.uuid4().hex)
         return cls(ctr=ctr, start=context, protected=set(protected), allowed=set(allowed))
 
     @function
