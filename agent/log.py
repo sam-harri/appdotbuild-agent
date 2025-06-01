@@ -122,8 +122,8 @@ logger = get_logger(__name__)
 
 def init_sentry():
     """Deprecated. A candidate for removal in future versions."""
-    sentry_dsn = os.getenv("SENTRY_DSN")
 
+    sentry_dsn = os.getenv("SENTRY_DSN")
     if sentry_dsn:
         logger.info("Sentry enabled")
         sentry_sdk.init(
