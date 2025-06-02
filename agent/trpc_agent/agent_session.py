@@ -1,4 +1,3 @@
-import datetime
 import logging
 from typing import Dict, Any, Optional, TypedDict, List, Union
 
@@ -273,7 +272,7 @@ class TrpcAgentSession(AgentInterface):
             structured_blocks = [
                 ExternalContentBlock(
                     content=format_internal_message_for_display(x),
-                    timestamp=datetime.datetime.now(datetime.UTC)
+                    #timestamp=datetime.datetime.now(datetime.UTC)
                 )
                 for x in content
             ]
@@ -281,7 +280,7 @@ class TrpcAgentSession(AgentInterface):
             structured_blocks = [
                 ExternalContentBlock(
                     content=content,
-                    timestamp=datetime.datetime.now(datetime.UTC)
+                    #timestamp=datetime.datetime.now(datetime.UTC)
                 )
             ]
 

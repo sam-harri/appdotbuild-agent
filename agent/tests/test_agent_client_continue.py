@@ -1,5 +1,4 @@
 import pytest
-import datetime
 from api.agent_server.agent_client import AgentApiClient
 from api.agent_server.models import (
     AgentSseEvent,
@@ -24,7 +23,7 @@ async def test_continue_conversation_builds_history(monkeypatch):
     """Ensure continue_conversation reuses previous_request.all_messages and passes them to send_message."""
 
     # Prepare a previous assistant event
-    block = ExternalContentBlock(content="Hello", timestamp=datetime.datetime.utcnow())
+    block = ExternalContentBlock(content="Hello")
     assistant_msg = AgentMessage(role="assistant", kind=MessageKind.STAGE_RESULT, messages=[block])
     prev_event = AgentSseEvent(status=AgentStatus.IDLE, traceId="tid123", message=assistant_msg)
 

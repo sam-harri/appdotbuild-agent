@@ -79,8 +79,8 @@ model ExternalContentBlock {
   @doc("The content of the block.")
   content: string;
 
-  @doc("The timestamp of the block.")
-  timestamp: utcDateTime;
+  // @doc("The timestamp of the block.")
+  // timestamp: utcDateTime;
 }
 
 @doc("Represents a message from the agent to the user, including structured content blocks, state, and any code changes. The 'content' field has been deprecated in favor of the 'messages' field for better structured messaging.")

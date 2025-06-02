@@ -21,7 +21,6 @@ from fire import Fire
 import dagger
 from dagger import dag
 import os
-import datetime
 import json
 
 from api.agent_server.models import (
@@ -208,7 +207,7 @@ async def run_agent[T: AgentInterface](
                         content=json.dumps([{"role": "assistant", "content": [{"type": "text", "text": f"Error processing request: {str(e)}"}]}]),
                         messages=[ExternalContentBlock(
                             content=f"Error processing request: {str(e)}", 
-                            timestamp=datetime.datetime.now(datetime.UTC)
+                            #timestamp=datetime.datetime.now(datetime.UTC)
                         )],
                         agentState=None,
                         unifiedDiff=""

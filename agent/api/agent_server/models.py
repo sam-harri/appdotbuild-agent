@@ -7,7 +7,6 @@ They are used by the `async_server.py` for data validation.
 
 Refer to `architecture.puml` for context within the system.
 """
-import datetime
 from enum import Enum
 import ujson as json
 from typing import Dict, List, Optional, Any, Union, Literal, Type, TypeVar
@@ -58,7 +57,7 @@ class ExternalContentBlock(BaseModel):
     """Represents a single content block in an external message."""
     role: Literal["assistant"] = Field("assistant", description="Deprecated. The role of the block. Will be removed in the future.")
     content: str = Field(..., description="The content of the block.")
-    timestamp: datetime.datetime = Field(..., description="The timestamp of the block.")
+    #timestamp: datetime.datetime = Field(..., description="The timestamp of the block.")
 
 class AgentMessage(BaseModel):
     """The detailed message payload from the agent."""
