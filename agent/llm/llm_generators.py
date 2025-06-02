@@ -50,16 +50,18 @@ Return ONLY the name, nothing else.""")
         return "generated-application"
 
 
-async def generate_commit_message(prompt: str, llm_client: AsyncLLM) -> str:
+async def generate_commit_message(app_description: str, user_input: str, llm_client: AsyncLLM) -> str:
     """Generate a Git commit message from the application description"""
     try:
-        logger.info(f"Generating commit message from prompt: {prompt[:50]}...")
+        logger.info(f"Generating commit message from prompt: {app_description[:50]}... and user input: {user_input[:50]}")
 
         messages = [
             Message(role="user", content=[
-                TextRaw(f"""Based on this application description, generate a concise Git commit message that follows best practices.
+                TextRaw(f"""Based on this application description and the recent user input (if any),
+generate a concise Git commit message that follows best practices.
 The message should be clear, descriptive, and follow conventional commit format.
-Application description: "{prompt}"
+Application description: "{app_description}"
+User input: "{user_input}"
 Return ONLY the commit message, nothing else.""")
             ])
         ]
