@@ -10,6 +10,8 @@ This is the "agent" repository for [app.build](https://app.build). Here, we have
 
 ![Architecture of CLI->platform->agent](./readme-docs/architecture_diagram.png)
 
+The CLI and the platform's code are available in the [platform repository](https://github.com/appdotbuild/platform).
+
 ## Contributing
 
 If you're looking to contribute to the CLI, or to the control plane, please refer to our [CONTRIBUTING.md](./CONTRIBUTING.md) document.
