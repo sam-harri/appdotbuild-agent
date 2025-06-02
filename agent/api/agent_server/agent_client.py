@@ -3,12 +3,17 @@ import uuid
 from typing import List, Dict, Any, Tuple, Optional, Callable
 from httpx import AsyncClient, ASGITransport
 
-from api.agent_server.models import AgentSseEvent, AgentRequest, UserMessage, ConversationMessage, AgentMessage, MessageKind, FileEntry
+from api.agent_server.models import AgentSseEvent, AgentRequest, UserMessage, ConversationMessage, FileEntry, MessageKind
 from api.agent_server.async_server import app, CONFIG
 from log import get_logger
 
 logger = get_logger(__name__)
 
+# Re-export MessageKind for convenient import in tests
+__all__ = [
+    "AgentApiClient",
+    "MessageKind",
+]
 
 class AgentApiClient:
     """Reusable client for interacting with the Agent API server"""
@@ -81,62 +86,37 @@ class AgentApiClient:
         return events, request
 
     async def continue_conversation(self,
-                                  previous_events: List[AgentSseEvent],
-                                  previous_request: AgentRequest,
-                                  message: str,
-                                  all_files: Optional[List[Dict[str, str]]] = None,
-                                  settings: Optional[Dict[str, Any]] = None,
-                                  stream_cb: Optional[Callable[[AgentSseEvent], None]] = None
-                                 ) -> Tuple[List[AgentSseEvent], AgentRequest]:
-        """Continue a conversation using the agent state from previous events"""
-        agent_state = None
-        messages_history_json_str: Optional[str] = None
-
+                                   previous_events: List[AgentSseEvent],
+                                   previous_request: AgentRequest,
+                                   message: str,
+                                   all_files: Optional[List[Dict[str, str]]] = None,
+                                   settings: Optional[Dict[str, Any]] = None,
+                                   stream_cb: Optional[Callable[[AgentSseEvent], None]] = None
+                                  ) -> Tuple[List[AgentSseEvent], AgentRequest]:
+        """Continue a conversation using the agent state from previous events."""
+        # Use agent_state from the latest event (if any)
+        agent_state: Optional[Dict[str, Any]] = None
         for event in reversed(previous_events):
-            if event.message:
+            if event.message and event.message.agent_state is not None:
                 agent_state = event.message.agent_state
-                if isinstance(event.message.content, str):
-                    messages_history_json_str = event.message.content
                 break
 
-        messages_history_casted: List[ConversationMessage] = []
-        if messages_history_json_str:
-            try:
-                history_list_raw = json.loads(messages_history_json_str)
-                for m_raw in history_list_raw:
-                    role = m_raw.get("role")
-                    raw_content = m_raw.get("content", "")
+        # Fallback to the agent_state stored in the previous_request itself
+        if agent_state is None:
+            agent_state = previous_request.agent_state
 
-                    current_content_str = ""
-                    if isinstance(raw_content, str):
-                        current_content_str = raw_content
-                    elif isinstance(raw_content, list) and len(raw_content) > 0 and isinstance(raw_content[0], dict) and "text" in raw_content[0]:
-                        # If content is a list of dicts like [{'text': ..., 'type': ...}], extract text from first element for simplicity in history
-                        current_content_str = raw_content[0].get("text", "")
-                    else:
-                        # Fallback for other unexpected content structures
-                        current_content_str = str(raw_content)
-
-                    if role == "user":
-                        messages_history_casted.append(UserMessage(role="user", content=current_content_str))
-                    elif role == "assistant":
-                        messages_history_casted.append(AgentMessage(
-                            role="assistant",
-                            content=current_content_str, # AgentMessage.content is also a string, potentially JSON string of blocks
-                            kind=MessageKind.STAGE_RESULT,
-                            agentState=None, unifiedDiff=None, app_name=None, commit_message=None
-                        ))
-            except json.JSONDecodeError:
-                logger.error("Failed to decode messages_history from event content.")
-            except Exception as e:
-                logger.error(f"Error processing message history: {e}")
+        # Reuse the full history that the server already knows about
+        all_messages_history: List[ConversationMessage] = (
+            list(previous_request.all_messages) if previous_request.all_messages else []
+        )
 
         trace_id = previous_request.trace_id
         application_id = previous_request.application_id
 
+        # Delegate to `send_message`, which will append the new user message
         events, request = await self.send_message(
             message=message,
-            messages_history=messages_history_casted,
+            messages_history=all_messages_history,
             application_id=application_id,
             trace_id=trace_id,
             agent_state=agent_state,

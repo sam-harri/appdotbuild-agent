@@ -1,9 +1,10 @@
+import datetime
 import logging
 from typing import Dict, Any, Optional, TypedDict, List, Union
 
 from anyio.streams.memory import MemoryObjectSendStream
 
-from llm.common import Message, TextRaw
+from llm.common import InternalMessage, TextRaw
 from trpc_agent.application import FSMApplication
 from llm.utils import AsyncLLM, get_llm_client
 from api.fsm_tools import FSMToolProcessor, FSMStatus
@@ -11,14 +12,17 @@ from api.snapshot_utils import snapshot_saver
 from core.statemachine import MachineCheckpoint
 from uuid import uuid4
 import dagger
-import ujson as json
 
 from api.agent_server.models import (
     AgentRequest,
     AgentSseEvent,
     AgentMessage,
+    UserMessage,
+    ConversationMessage,
     AgentStatus,
+    ExternalContentBlock,
     MessageKind,
+    format_internal_message_for_display,
 )
 from api.agent_server.interface import AgentInterface
 from llm.llm_generators import generate_app_name, generate_commit_message
@@ -46,18 +50,30 @@ class TrpcAgentSession(AgentInterface):
         self._sse_counter = 0
 
     @staticmethod
-    def convert_agent_messages_to_llm_messages(agent_messages: List[AgentMessage]) -> List[Message]:
-        """Convert AgentMessage list to LLM Message format."""
-        return [
-            Message(
-                role=m.role if m.role == "user" else "assistant",
-                content=[TextRaw(text=m.content)]
+    def convert_agent_messages_to_llm_messages(agent_messages: List[ConversationMessage]) -> List[InternalMessage]:
+        """Convert ConversationMessage list to LLM InternalMessage format."""
+        internal_messages: List[InternalMessage] = []
+        for m in agent_messages:
+            text_content = ""
+            if isinstance(m, UserMessage):
+                text_content = m.content
+            elif isinstance(m, AgentMessage):
+                # Extract content from messages field
+                if m.messages:
+                    text_content = "\n".join([block.content for block in m.messages if block.content])
+                else:
+                    text_content = ""  # Empty content if no messages
+            
+            internal_messages.append(
+                InternalMessage(
+                    role=m.role,
+                    content=[TextRaw(text=text_content)]
+                )
             )
-            for m in agent_messages
-        ]
+        return internal_messages
 
     @staticmethod
-    def filter_messages_for_user(messages: List[Message]) -> List[Message]:
+    def filter_messages_for_user(messages: List[InternalMessage]) -> List[InternalMessage]:
         """Filter messages for user."""
         return [m for m in messages if m.role == "assistant"]
 
@@ -234,7 +250,7 @@ class TrpcAgentSession(AgentInterface):
                     trace_id=self.trace_id,
                     key="fsmtools_messages",
                     data=[msg.to_dict() for msg in messages]
-            )
+                )
             await event_tx.aclose()
 
     # ---------------------------------------------------------------------
@@ -245,20 +261,29 @@ class TrpcAgentSession(AgentInterface):
         event_tx: MemoryObjectSendStream[AgentSseEvent],
         status: AgentStatus,
         kind: MessageKind,
-        content: Union[List[Message], str],
+        content: Union[List[InternalMessage], str],
         fsm_state: Optional[MachineCheckpoint] = None,
         unified_diff: Optional[str] = None,
         app_name: Optional[str] = None,
         commit_message: Optional[str] = None,
     ) -> None:
         """Send event with specified parameters."""
-        # Handle content serialization based on type
+        structured_blocks: List[ExternalContentBlock]
         if isinstance(content, list):
-            # Messages need to be serialized to JSON
-            content_str = json.dumps([x.to_dict() for x in content], sort_keys=True)
+            structured_blocks = [
+                ExternalContentBlock(
+                    content=format_internal_message_for_display(x),
+                    timestamp=datetime.datetime.now(datetime.UTC)
+                )
+                for x in content
+            ]
         else:
-            # Error messages are already strings
-            content_str = content
+            structured_blocks = [
+                ExternalContentBlock(
+                    content=content,
+                    timestamp=datetime.datetime.now(datetime.UTC)
+                )
+            ]
 
         event = AgentSseEvent(
             status=status,
@@ -266,7 +291,7 @@ class TrpcAgentSession(AgentInterface):
             message=AgentMessage(
                 role="assistant",
                 kind=kind,
-                content=content_str,
+                messages=structured_blocks,
                 agentState={"fsm_state": fsm_state} if fsm_state else None,
                 unifiedDiff=unified_diff,
                 complete_diff_hash=None,

@@ -98,7 +98,7 @@ def load_content(data: list[dict]) -> list[ContentBlock]:
 
 
 @dataclass
-class Message:
+class InternalMessage:
     role: Literal["user", "assistant"]
     content: Iterable[ContentBlock]
 
@@ -147,6 +147,13 @@ class Tool(TypedDict, total=False):
     input_schema: Required[dict[str, object]]
     cache_control: NotRequired[dict[str, str]]
 
+
+# TODO: remove this alias after all clients are updated
+Message = InternalMessage
+
+# ----------------------------------
+# Async LLM protocol
+# ----------------------------------
 
 class AsyncLLM(Protocol):
     async def completion(
