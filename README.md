@@ -2,7 +2,7 @@
 
 [**app.build**](https://app.build) is an open-source AI agent for generating full-stack applications.
 
-See [agent/README.md][agent/README.md] to learn more about the agent's specific architecture.
+See [agent/README.md](agent/README.md) to learn more about the agent's specific architecture.
 
 This is the "agent" repository for [app.build](https://app.build). Here, we have:
 
