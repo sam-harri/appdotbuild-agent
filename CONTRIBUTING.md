@@ -2,8 +2,9 @@
 
 ## Basic Usage
 
-1) Install [uv](https://docs.astral.sh/uv/getting-started/installation/)
-2) Make sure 
+1) Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and [dagger](https://dagger.io) 
+2) Make sure you have `ANTHROPIC_API_KEY` and `GEMINI_API_KEY` env vars available.
+3) Run the commands 
 
 ### Commands
 
@@ -15,6 +16,7 @@ uv run test_e2e  # only run e2e test
 uv run lint   # lint and autofix the code
 uv run update_cache  # update the LLM cache, required for new prompts or generation logic changes
 uv run generate "my app description" # generate an app from scratch using full pipeline, similar to e2e test
+uv run interactive  # a naive debug client working with local server
 ```
 
 ### Testing with debug client on prod servers
@@ -34,7 +36,8 @@ uv run generate "my app description" # generate an app from scratch using full p
 We use VCR for testing LLM calls. VCR records LLM completions and saves them to a cache file, allowing us to replay them in tests. This is useful for testing LLM interactions without making real API calls.
 
 - **Record mode**: Makes real API calls, saves responses to cache
-- **Replay mode**: Uses cached responses (default, used in CI)
+- **Replay mode**: Uses only cached responses
+- **LRU mode**: Tries using cached responses, but can call APIs too. 
 - **Off mode**: No caching, direct API calls
 
 Default usage (to run tests with cached responses):
