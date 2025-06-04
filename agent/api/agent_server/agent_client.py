@@ -65,7 +65,7 @@ class AgentApiClient:
 
         url = self.base_url or "http://test"
         url += "/message"
-        headers={"Accept": "text/event-stream"}
+        headers={"Accept": "text/event-stream", "Accept-Encoding": "br, gzip, deflate"}
         if auth_token:
             headers["Authorization"] = f"Bearer {auth_token}"
             logger.debug("Added authorization header")
