@@ -125,8 +125,12 @@ class TrpcAgentSession(AgentInterface):
                     fsm_message_history = [InternalMessage.from_dict(m) for m in fsm_messages] + fsm_message_history
                 if (req_fsm_state := request.agent_state.get("fsm_state")):
                     fsm_state = req_fsm_state
+                    if request.all_files:
+                        fsm_state["context"]["files"].update({p.path: p.content for p in request.all_files}) # pyright: ignore
                     fsm_app = await FSMApplication.load(self.client, req_fsm_state)
                     snapshot_saver.save_snapshot(trace_id=self._snapshot_key, key="fsm_enter", data=req_fsm_state)
+                if (req_metadata := request.agent_state.get("metadata")):
+                    metadata.update(req_metadata)
             else:
                 logger.info(f"Initializing new session for trace {self.trace_id}")
 
@@ -137,6 +141,7 @@ class TrpcAgentSession(AgentInterface):
                 "fsm_state": fsm_state,
                 "metadata": metadata,
             }
+            snapshot_files = {**fsm_state["context"]["files"]} if fsm_state else {} # pyright: ignore
 
             # Processing
             logger.info(f"Last user message: {fsm_message_history[-1].content}")
@@ -164,6 +169,7 @@ class TrpcAgentSession(AgentInterface):
                     app_name = await generate_app_name(prompt, flash_lite_client)
                     # Communicate the app name and commit message and template diff to the client
                     initial_template_diff = await self.processor_instance.fsm_app.get_diff_with({})
+                    agent_state["metadata"].update({"app_name": app_name, "template_diff_sent": True})
                     await self.send_event(
                         event_tx=event_tx,
                         status=AgentStatus.RUNNING,
@@ -174,11 +180,6 @@ class TrpcAgentSession(AgentInterface):
                         app_name=app_name,
                         commit_message="Initial commit"
                     )
-                    agent_state["metadata"].update({
-                        "app_name": app_name,
-                        "template_diff_sent": True,
-                    })
-
 
                 # Send event based on FSM status
                 match fsm_status:
@@ -212,8 +213,6 @@ class TrpcAgentSession(AgentInterface):
                             assert self.processor_instance.fsm_app is not None
                             logger.info("FSM is completed")
 
-                            #TODO: write unit test for this
-                            snapshot_files = self.prepare_snapshot_from_request(request)
                             final_diff = await self.processor_instance.fsm_app.get_diff_with(snapshot_files)
 
                             logger.info(
@@ -300,7 +299,11 @@ class TrpcAgentSession(AgentInterface):
                 role="assistant",
                 kind=kind,
                 messages=structured_blocks,
-                agentState={"fsm_state": agent_state["fsm_state"], "fsm_messages": [x.to_dict() for x in agent_state["fsm_messages"]]} if agent_state else None,
+                agentState={
+                    "fsm_state": agent_state["fsm_state"],
+                    "fsm_messages": [x.to_dict() for x in agent_state["fsm_messages"]],
+                    "metadata": agent_state["metadata"],
+                } if agent_state else None,
                 unifiedDiff=unified_diff,
                 complete_diff_hash=None,
                 diff_stat=None,
