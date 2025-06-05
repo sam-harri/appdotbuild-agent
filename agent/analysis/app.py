@@ -25,26 +25,29 @@ def group_sse_events(sse_files: List[Dict[str, Any]]) -> Dict[str, List[Dict[str
     trace_groups = defaultdict(list)
 
     for file_info in sse_files:
-        if file_info.get("is_local", True):
-            # local pattern: {trace_id}-sse_events_{sequence}.json
-            filename = file_info["name"]
-            match = re.match(r"([a-f0-9-]+)-sse_events_(\d+)\.json", filename)
-            if match:
-                trace_id, sequence = match.groups()
-                file_info["trace_id"] = trace_id
-                file_info["sequence"] = int(sequence)
-                trace_groups[trace_id].append(file_info)
-        else:
-            # s3 pattern: {trace_id}/sse_events/{sequence}.json
-            path = file_info["path"]
-            match = re.match(r"([a-f0-9-]+)/sse_events/(\d+)\.json", path)
-            if match:
-                trace_id, sequence = match.groups()
-                file_info["trace_id"] = trace_id
-                file_info["sequence"] = int(sequence)
-                trace_groups[trace_id].append(file_info)
+        trace_id = None
+        sequence = None
 
-    # sort each group by sequence number
+        if file_info.get("is_local", True):
+            # local pattern: {trace_id}_{timestamp}-sse_events_{sequence}.json
+            filename = file_info["name"]
+            match = re.match(r"([a-f0-9_]+)-sse_events_(\d+)\.json", filename)
+            if match:
+                trace_id, sequence = match.groups()
+        else:
+            # s3 pattern: app-{app_id}.req-{req_id}_{timestamp}/sse_events/{sequence}.json
+            path = file_info["path"]
+            match = re.match(r"(app-[a-f0-9-]+\.req-[a-f0-9-]+)_\d+/sse_events/(\d+)\.json", path)
+            if match:
+                trace_id, sequence = match.groups()
+                # trace_id now has timestamp stripped (app-xxx.req-xxx)
+
+        if trace_id and sequence is not None:
+            file_info["trace_id"] = trace_id
+            file_info["sequence"] = int(sequence)
+            trace_groups[trace_id].append(file_info)
+
+    # sort each group by sequence number (keep ALL events in sequence)
     for trace_id in trace_groups:
         trace_groups[trace_id].sort(key=lambda x: x["sequence"])
 
@@ -286,8 +289,8 @@ def main():
         # file type selection
         file_type = st.radio(
             "Trace Type",
-            options=["FSM exit states", "FSM enter states", "Top level agent", "SSE events"],
-            help="Select the type of trace files to analyze",
+            options=["FSM exit states", "FSM enter states", "SSE events"],
+            help="Select the type of trace files to analyze. Note: Top level agent data is embedded in SSE events.",
         )
 
         # get file pattern
@@ -301,6 +304,20 @@ def main():
 
         if not fsm_files:
             st.warning(f"No {file_type} files found")
+            # add debug info for SSE events
+            if file_type == "SSE events" and not trace_loader.is_local:
+                st.info(f"Debug: Searching for pattern '{pattern}' in S3 bucket '{traces_location}'")
+                # try to list any files at all to see what's there
+                try:
+                    all_files = trace_loader._list_s3_files(["*"])
+                    st.write(f"Total files in bucket: {len(all_files)}")
+                    if all_files:
+                        sample_files = all_files[:10]
+                        st.write("Sample file paths:")
+                        for f in sample_files:
+                            st.code(f["path"])
+                except Exception as e:
+                    st.error(f"Error listing files: {e}")
             return
 
         # special handling for SSE events
@@ -314,14 +331,28 @@ def main():
 
             # let user select a trace group
             def format_trace_option(trace_id):
-                files_count = len(trace_groups[trace_id])
-                latest_file = max(trace_groups[trace_id], key=lambda x: x.get("modified", ""))
+                files = trace_groups[trace_id]
+                files_count = len(files)
+                latest_file = files[-1]  # get the last file (highest sequence)
                 modified_str = latest_file["modified"].strftime("%Y-%m-%d %H:%M:%S")
                 return f"{trace_id[:12]}... ({files_count} events, {modified_str})"
 
-            selected_trace_id = st.selectbox(
-                "Select SSE Event Trace", options=list(trace_groups.keys()), format_func=format_trace_option
-            )
+            # add trace filter
+            trace_filter = st.text_input("Filter traces", placeholder="Enter text to filter trace IDs...")
+            
+            # filter traces based on user input
+            trace_ids = list(trace_groups.keys())
+            if trace_filter:
+                filter_lower = trace_filter.lower()
+                trace_ids = [tid for tid in trace_ids if filter_lower in tid.lower()]
+            
+            if not trace_ids:
+                st.warning(f"No traces found matching '{trace_filter}'" if trace_filter else "No traces available")
+                selected_trace_id = None
+            else:
+                selected_trace_id = st.selectbox(
+                    "Select SSE Event Trace", options=trace_ids, format_func=format_trace_option
+                )
 
             # store the selected trace group
             selected_file = None
@@ -351,7 +382,23 @@ def main():
                         # fallback for files without directory
                         return f"{file_info['path']} ({file_info['modified'].strftime('%Y-%m-%d %H:%M:%S')})"
 
-            selected_file = st.selectbox("Select file", options=fsm_files, format_func=format_file_option)
+            # add file filter
+            file_filter = st.text_input("Filter files", placeholder="Enter text to filter files...")
+            
+            # filter files based on user input
+            filtered_files = fsm_files
+            if file_filter:
+                filter_lower = file_filter.lower()
+                filtered_files = [
+                    f for f in fsm_files 
+                    if filter_lower in f.get("name", "").lower() or filter_lower in f.get("path", "").lower()
+                ]
+            
+            if not filtered_files:
+                st.warning(f"No files found matching '{file_filter}'" if file_filter else "No files available")
+                selected_file = None
+            else:
+                selected_file = st.selectbox("Select file", options=filtered_files, format_func=format_file_option)
             selected_trace_group = []
 
         # actors selection - only show for FSM enter/exit files
@@ -365,7 +412,15 @@ def main():
             actors_to_display = []
         # Process button
         process_label = "Process Trace" if file_type == "SSE events" else "Process File"
-        if st.button(process_label, type="primary"):
+        
+        # check if something is selected
+        can_process = False
+        if file_type == "SSE events":
+            can_process = selected_trace_id is not None
+        else:
+            can_process = selected_file is not None
+            
+        if st.button(process_label, type="primary", disabled=not can_process):
             if file_type == "SSE events":
                 st.session_state.current_trace_group = selected_trace_group
                 st.session_state.selected_trace_id = selected_trace_id
@@ -393,12 +448,13 @@ def main():
                     trace_loader = st.session_state.trace_loader
                     sse_events = []
 
-                    # load all SSE event files in the group
+                    # load ALL SSE event files in the group (full sequence)
                     for file_info in trace_group:
                         try:
                             event_content = trace_loader.load_file(file_info)
                             # pre-process event for faster display
                             event_content["sequence"] = file_info["sequence"]
+                            event_content["trace_id"] = file_info["trace_id"]
 
                             # extract commonly accessed fields for faster search
                             message = event_content.get("message", {})
@@ -412,12 +468,21 @@ def main():
 
                             sse_events.append(event_content)
                         except Exception as e:
-                            st.error(f"Error loading {file_info['name']}: {str(e)}")
+                            st.error(f"Error loading {file_info.get('name', file_info.get('path'))}: {str(e)}")
 
                     # sort by sequence number
                     sse_events.sort(key=lambda x: x.get("sequence", 0))
 
+                    # extract top-level agent messages from LAST SSE event (has full collection)
+                    fsm_messages = None
+                    if sse_events:
+                        last_event = sse_events[-1]  # get the last event in sequence
+                        message = last_event.get("message", {})
+                        agent_state = message.get("agent_state", {})
+                        fsm_messages = agent_state.get("fsm_messages")
+
                     st.session_state.sse_events = sse_events
+                    st.session_state.fsm_messages = fsm_messages
                     st.session_state.trace_type = "sse"
                     st.session_state.processing = False
 
@@ -598,6 +663,33 @@ def main():
                 for event in filtered_events:
                     sequence = event.get("sequence", 0)
                     display_sse_event(event, sequence)
+
+            # display top-level agent messages if available
+            if "fsm_messages" in st.session_state and st.session_state.fsm_messages:
+                st.markdown("---")
+                st.header("Top-Level Agent Messages (from last SSE event)")
+
+                fsm_messages = st.session_state.fsm_messages
+                if isinstance(fsm_messages, list):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.metric("Total Messages", len(fsm_messages))
+                    with col2:
+                        # count tool uses
+                        tool_uses = sum(
+                            1
+                            for msg in fsm_messages
+                            if isinstance(msg.get("content"), list)
+                            for item in msg["content"]
+                            if isinstance(item, dict) and item.get("type") == "tool_use"
+                        )
+                        st.metric("Tool Uses", tool_uses)
+
+                    # display messages
+                    for idx, msg in enumerate(fsm_messages):
+                        display_top_level_message(msg, idx)
+                else:
+                    st.info("FSM messages found but not in expected list format")
 
         elif st.session_state.trace_type == "raw" and "raw_content" in st.session_state:
             # Raw trace display logic - show plain JSON
