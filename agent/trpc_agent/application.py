@@ -243,12 +243,16 @@ class FSMApplication:
         return ""
 
     @property
+    def truncated_files(self) -> dict[str, str]:
+        return {k: "large file truncated" if len(v) > 256 else v for k, v in self.fsm.context.files.items()}
+
+    @property
     def state_output(self) -> dict:
         match self.current_state:
             case FSMState.REVIEW_DRAFT:
                 return {"draft": self.fsm.context.files}
             case FSMState.REVIEW_APPLICATION:
-                return {"application": self.fsm.context.files}
+                return {"application": self.truncated_files}
             case FSMState.COMPLETE:
                 return {"application": self.fsm.context.files}
             case FSMState.FAILURE:
