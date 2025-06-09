@@ -43,7 +43,7 @@ class StubLLM(AsyncLLM):
             thinking_tokens=0,
         )
 
-
+@pytest.mark.skipif(os.getenv("GEMINI_API_KEY") is None, reason="GEMINI_API_KEY is not set")
 async def test_cached_llm():
     with tempfile.NamedTemporaryFile(delete_on_close=False) as tmp_file:
         base_llm = StubLLM()
