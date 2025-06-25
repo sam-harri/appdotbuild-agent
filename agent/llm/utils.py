@@ -7,15 +7,22 @@ from llm.common import AsyncLLM, Message, TextRaw, ContentBlock
 from llm.anthropic_client import AnthropicLLM
 from llm.cached import CachedLLM, CacheMode
 from llm.gemini import GeminiLLM
+from llm.models_config import MODELS_MAP, ALL_MODEL_NAMES, OLLAMA_MODEL_NAMES, ANTHROPIC_MODEL_NAMES, GEMINI_MODEL_NAMES, ModelCategory, get_model_for_category
+
 from log import get_logger
 from hashlib import md5
+
+try:
+    from llm.ollama_client import OllamaLLM
+except ImportError:
+    OllamaLLM = None
 
 logger = get_logger(__name__)
 
 # Cache for LLM clients
 llm_clients_cache: Dict[str, AsyncLLM] = {}
 
-LLMBackend = Literal["bedrock", "anthropic", "gemini"]
+LLMBackend = Literal["bedrock", "anthropic", "gemini", "ollama"]
 
 
 def merge_text(content: list[ContentBlock]) -> list[ContentBlock]:
@@ -48,20 +55,26 @@ async def loop_completion(m_client: AsyncLLM, messages: list[Message], system_pr
 
 
 def _guess_llm_backend(model_name: str) -> LLMBackend:
-    match model_name:
-        case ("sonnet" | "haiku"):
-            if os.getenv("AWS_SECRET_ACCESS_KEY") or os.getenv("PREFER_BEDROCK"):
-                return "bedrock"
-            if os.getenv("ANTHROPIC_API_KEY"):
-                return "anthropic"
-            # that is rare case, but may be non-trivial AWS config, try Bedrock again
+    # If PREFER_OLLAMA is set and model is available in Ollama, use Ollama
+    if os.getenv("PREFER_OLLAMA") and model_name in OLLAMA_MODEL_NAMES:
+        return "ollama"
+    
+    if model_name in ANTHROPIC_MODEL_NAMES:
+        if os.getenv("AWS_SECRET_ACCESS_KEY") or os.getenv("PREFER_BEDROCK"):
             return "bedrock"
-        case ("gemini-flash" | "gemini-pro" | "gemini-flash-lite"):
-            if os.getenv("GEMINI_API_KEY"):
-                return "gemini"
-            raise ValueError("Gemini backend requires GEMINI_API_KEY to be set")
-        case _:
-            raise ValueError(f"Unknown model name: {model_name}")
+        if os.getenv("ANTHROPIC_API_KEY"):
+            return "anthropic"
+        # that is rare case, but may be non-trivial AWS config, try Bedrock again
+        return "bedrock"
+    elif model_name in GEMINI_MODEL_NAMES:
+        if os.getenv("GEMINI_API_KEY"):
+            return "gemini"
+        raise ValueError("Gemini backend requires GEMINI_API_KEY to be set")
+    elif model_name in OLLAMA_MODEL_NAMES:
+        # Default to localhost if no host is specified
+        return "ollama"
+    else:
+        raise ValueError(f"Unknown model name: {model_name}")
 
 
 def _cache_key_from_seq(key: Sequence) -> str:
@@ -71,7 +84,8 @@ def _cache_key_from_seq(key: Sequence) -> str:
 
 def get_llm_client(
     backend: Literal["auto"] | LLMBackend = "auto",
-    model_name: Literal["sonnet", "haiku", "gemini-flash", "gemini-pro", "gemini-flash-lite"] = "sonnet",
+    model_name: str | None = None,
+    category: str | None = None,
     cache_mode: CacheMode = "auto",
     client_params: dict | None = None,
 ) -> AsyncLLM:
@@ -81,15 +95,20 @@ def get_llm_client(
     If a client with the same parameters already exists, it will be returned.
 
     Args:
-        backend: LLM backend provider, either "bedrock" or "anthropic"
-        model_name: Model name to use, either "sonnet" or "haiku"
+        backend: LLM backend provider, either "bedrock", "anthropic", "gemini", or "ollama"
+        model_name: Specific model name to use (overrides category)
+        category: Model category ("best_coding", "universal", "ultra_fast", "vision") for automatic selection
         cache_mode: Cache mode, either "off", "record", or "replay"
-        cache_path: Path to the cache file
         client_params: Additional parameters to pass to the client constructor
 
     Returns:
         An AsyncLLM instance
     """
+    if model_name is None:
+        if category is None:
+            category = ModelCategory.UNIVERSAL
+        model_name = get_model_for_category(category)
+    
     # Convert client_params dict to frozenset for caching
     client_params = client_params or {}
     params_key = frozenset(client_params.items())
@@ -106,30 +125,10 @@ def get_llm_client(
         return llm_clients_cache[cache_key]
 
     # Otherwise create a new client
-    models_map = {
-        "sonnet": {
-            "bedrock": "us.anthropic.claude-sonnet-4-20250514-v1:0",
-            "anthropic": "claude-sonnet-4-20250514"
-        },
-        "haiku": {
-            "bedrock": "us.anthropic.claude-3-5-haiku-20241022-v1:0",
-            "anthropic": "claude-3-5-haiku-20241022"
-        },
-        "gemini-pro":
-            {
-                "gemini": "gemini-2.5-pro-preview-05-06",
-            },
-        "gemini-flash":
-            {
-                "gemini": "gemini-2.5-flash-preview-05-20",
-            },
-        "gemini-flash-lite":
-            {
-                "gemini": "gemini-2.5-flash-lite-preview-06-17",
-            },
-    }
-
-    chosen_model = models_map[model_name][backend]
+    if model_name not in MODELS_MAP:
+        raise ValueError(f"Unknown model name: {model_name}. Available models: {', '.join(ALL_MODEL_NAMES)}")
+    
+    chosen_model = MODELS_MAP[model_name][backend]
 
     match backend:
         case "bedrock" | "anthropic":
@@ -138,6 +137,16 @@ def get_llm_client(
         case "gemini":
             client_params["model_name"] = chosen_model
             client = GeminiLLM(**client_params)
+        case "ollama":
+            if OllamaLLM is None:
+                raise ValueError("Ollama backend requires ollama package to be installed. Install with: uv sync --group ollama")
+            # Use OLLAMA_HOST/OLLAMA_API_BASE env vars or default to localhost
+            host = (
+                os.getenv("OLLAMA_HOST") or 
+                os.getenv("OLLAMA_API_BASE") or 
+                client_params.get("host", "http://localhost:11434")
+            )
+            client = OllamaLLM(host=host, model_name=chosen_model)
         case _:
             raise ValueError(f"Unknown backend: {backend}")
 
@@ -151,3 +160,23 @@ def get_llm_client(
     llm_clients_cache[cache_key] = client
     logger.debug(f"Created new LLM client for {backend}/{model_name}")
     return client
+
+
+def get_best_coding_llm_client(**kwargs) -> AsyncLLM:
+    """Get LLM client optimized for best coding (slow, high quality)."""
+    return get_llm_client(category=ModelCategory.BEST_CODING, **kwargs)
+
+
+def get_universal_llm_client(**kwargs) -> AsyncLLM:
+    """Get LLM client optimized for universal tasks (medium speed, FSM tools)."""
+    return get_llm_client(category=ModelCategory.UNIVERSAL, **kwargs)
+
+
+def get_ultra_fast_llm_client(**kwargs) -> AsyncLLM:
+    """Get LLM client optimized for ultra fast tasks (commit names etc)."""
+    return get_llm_client(category=ModelCategory.ULTRA_FAST, **kwargs)
+
+
+def get_vision_llm_client(**kwargs) -> AsyncLLM:
+    """Get LLM client optimized for vision and UI analysis tasks."""
+    return get_llm_client(category=ModelCategory.VISION, **kwargs)

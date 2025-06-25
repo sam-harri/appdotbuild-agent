@@ -1,5 +1,7 @@
 from typing import Awaitable, Callable, Self, Protocol, runtime_checkable, Dict, Any, Tuple
 import dagger
+import anyio
+from fire import Fire
 
 import enum
 from core.application import ApplicationBase
@@ -33,7 +35,7 @@ class FSMStatus(enum.Enum):
     REFINEMENT_REQUEST = "REFINEMENT_REQUEST"
 
 
-class FSMToolProcessor[T: FSMInterface]:
+class FSMToolProcessor:
     """
     Thin adapter that exposes FSM functionality as tools for AI agents.
 
@@ -42,15 +44,15 @@ class FSMToolProcessor[T: FSMInterface]:
     any FSM application that implements the FSMInterface protocol.
     """
 
-    fsm_class: type[T]
-    fsm_app: T | None
+    fsm_class: type[FSMInterface]
+    fsm_app: FSMInterface | None
     settings: Dict[str, Any]
 
     def __init__(
         self,
         client: dagger.Client,
-        fsm_class: type[T],
-        fsm_app: T | None = None,
+        fsm_class: type[FSMInterface],
+        fsm_app: FSMInterface | None = None,
         settings: Dict[str, Any] | None = None,
         event_callback: Callable[[str], Awaitable[None]] | None = None,
         max_messages_tokens: int = 512 * 1024,
@@ -403,3 +405,49 @@ If the user's problem requires a specific integration that is not available, mak
 
 Make sure to appreciate the best software engineering practices, no matter what the user asks. Even stupid requests should be handled professionally.
 Do not consider the work complete until all components have been generated and the complete_fsm tool has been called.""".strip()
+
+
+async def main(initial_prompt: str = "A simple greeting app that says hello in five languages"):
+    """
+    Main entry point for the FSM tools module.
+    Initializes an FSM tool processor and interacts with top-level agent.
+    """
+    import os
+    import dagger
+    from trpc_agent.application import FSMApplication
+    from llm.utils import get_universal_llm_client
+    logger.info("Initializing FSM tools...")
+    client = get_universal_llm_client()
+    model_params = {"max_tokens": 8192 }
+
+
+    async with dagger.Connection(dagger.Config(log_output=open(os.devnull, "w"))) as dagger_client:
+        # Create processor without FSM instance - it will be created in start_fsm tool
+        processor = FSMToolProcessor(dagger_client, FSMApplication)
+        logger.info("FSM tools initialized successfully")
+
+        # Create the initial prompt for the AI agent
+        logger.info("Sending request to LLM...")
+        current_messages = [
+            InternalMessage(role="user", content=[TextRaw(initial_prompt)]),
+        ]
+        # Main interaction loop
+        while True:
+            new_messages = await processor.step(current_messages, client, model_params)
+
+            logger.debug(f"New messages: {new_messages}")
+            if new_messages:
+                current_messages += new_messages
+
+            logger.info(f"Iteration completed: {len(current_messages) - 1}")
+
+            break # Early out until feedback is wired to component name
+
+    logger.info("FSM interaction completed successfully")
+    return new_messages
+
+def run_main(initial_prompt: str = "A simple greeting app that says hello in five languages and stores history of greetings"):
+    return anyio.run(main, initial_prompt)
+
+if __name__ == "__main__":
+    Fire(run_main)

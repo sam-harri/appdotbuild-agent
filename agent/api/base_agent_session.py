@@ -8,7 +8,7 @@ import dagger
 from anyio.streams.memory import MemoryObjectSendStream
 
 from llm.common import ContentBlock, InternalMessage, TextRaw
-from llm.utils import AsyncLLM, get_llm_client
+from llm.utils import AsyncLLM, get_best_coding_llm_client, get_ultra_fast_llm_client
 from api.fsm_tools import FSMToolProcessor, FSMStatus, FSMInterface
 from api.snapshot_utils import snapshot_saver
 from core.statemachine import MachineCheckpoint
@@ -51,7 +51,7 @@ class BaseAgentSession(AgentInterface, ABC):
         self.settings = settings or {}
         self.fsm_application_class = fsm_application_class
         self.processor_instance = FSMToolProcessor(client, fsm_application_class)
-        self.llm_client: AsyncLLM = get_llm_client()
+        self.llm_client: AsyncLLM = get_best_coding_llm_client()
         self.model_params = {
             "max_tokens": 8192,
         }
@@ -162,8 +162,8 @@ class BaseAgentSession(AgentInterface, ABC):
             # Processing
             logger.info(f"Last user message: {fsm_message_history[-1].content}")
 
-            flash_lite_client = get_llm_client(model_name="gemini-flash-lite")
-            top_level_agent_llm = get_llm_client(model_name="gemini-flash")
+            lite_client = get_ultra_fast_llm_client()
+            top_level_agent_llm = get_best_coding_llm_client()
 
             while True:
                 logger.info("Looping into next step")
@@ -182,7 +182,7 @@ class BaseAgentSession(AgentInterface, ABC):
 
                 if not agent_state["metadata"]["template_diff_sent"] and self.processor_instance.fsm_app is not None:
                     prompt = self.processor_instance.fsm_app.fsm.context.user_prompt
-                    app_name = await generate_app_name(prompt, flash_lite_client)
+                    app_name = await generate_app_name(prompt, lite_client)
                     await self.send_event(
                         event_tx=event_tx,
                         status=AgentStatus.RUNNING,
@@ -284,7 +284,7 @@ class BaseAgentSession(AgentInterface, ABC):
                                 else:
                                     user_request = self.processor_instance.fsm_app.fsm.context.user_prompt
 
-                                commit_message = await generate_commit_message(user_request, flash_lite_client)
+                                commit_message = await generate_commit_message(user_request, lite_client)
 
                                 # Send actual diff in a separate event
                                 await self.send_event(
