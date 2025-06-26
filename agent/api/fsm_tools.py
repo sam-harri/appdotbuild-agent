@@ -315,7 +315,6 @@ class FSMToolProcessor:
             match block:
                 case TextRaw(text):
                     logger.info(f"LLM Message: {text}")
-                    await self.event_callback(f"🤔 Agent's thoughts:\n{text}")
                 case ToolUse(name):
                     match self.tool_mapping.get(name):
                         case None:
