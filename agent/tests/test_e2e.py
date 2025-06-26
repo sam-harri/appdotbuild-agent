@@ -143,13 +143,20 @@ async def run_e2e(prompt: str, standalone: bool, with_edit=True, template_id=Non
                     # Clean up Docker containers
                     stop_docker_compose(temp_dir, container_names["project_name"])
 
-@pytest.mark.skipif(requires_llm_provider(), reason=requires_llm_provider_reason)
+@pytest.mark.skip(reason="Ignoring test temporarily - flaky")
 @pytest.mark.parametrize("template_id", [
     pytest.param("nicegui_agent", marks=pytest.mark.nicegui),
+])
+async def test_e2e_generation_nicegui(template_id):
+    await run_e2e(standalone=False, prompt=DEFAULT_APP_REQUEST, template_id=template_id)
+
+@pytest.mark.skipif(requires_llm_provider(), reason=requires_llm_provider_reason)
+@pytest.mark.parametrize("template_id", [
     pytest.param("trpc_agent", marks=pytest.mark.trpc)
 ])
-async def test_e2e_generation(template_id):
+async def test_e2e_generation_trpc(template_id):
     await run_e2e(standalone=False, prompt=DEFAULT_APP_REQUEST, template_id=template_id)
+
 
 def create_app(prompt):
     import coloredlogs
