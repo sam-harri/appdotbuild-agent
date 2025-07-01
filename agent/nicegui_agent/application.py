@@ -11,6 +11,7 @@ from core.base_node import Node
 from core.statemachine import MachineCheckpoint
 from core.workspace import Workspace
 from nicegui_agent.actors import NiceguiActor
+from nicegui_agent import playbooks
 import dagger
 
 # Set up logging
@@ -22,7 +23,10 @@ for package in ["urllib3", "httpx", "google_genai.models"]:
 
 
 class FSMState(str, enum.Enum):
-    APPLICATION = "application"
+    DATA_MODEL_GENERATION = "data_model_generation"
+    REVIEW_DATA_MODEL = "review_data_model"
+    DATA_MODEL_APPLY_FEEDBACK = "data_model_apply_feedback"
+    APPLICATION_GENERATION = "application_generation"
     REVIEW_APPLICATION = "review_application"
     APPLY_FEEDBACK = "apply_feedback"
     COMPLETE = "complete"
@@ -104,7 +108,8 @@ class FSMApplication:
     def base_execution_plan(cls) -> str:
         return "\n".join(
             [
-                "1. NiceGUI application development based on user requirements.",
+                "1. Data model generation - Define data structures, schemas, and models",
+                "2. Application generation - Implement UI components and application logic",
                 "",
                 "The result application will be based on Python and NiceGUI framework. The application can include various UI components, event handling, and state management.",
             ]
@@ -152,21 +157,20 @@ class FSMApplication:
             ctx: ApplicationContext, result: Node[BaseData]
         ) -> None:
             await result.data.workspace.exec_mut(
-                    [
-                        "uv",
-                        "export",
-                        "--no-hashes",
-                        "--format",
-                        "requirements-txt",
-                        "--output-file",
-                        "requirements.txt",
-                        "--no-dev"
-                    ]
-                )
+                [
+                    "uv",
+                    "export",
+                    "--no-hashes",
+                    "--format",
+                    "requirements-txt",
+                    "--output-file",
+                    "requirements.txt",
+                    "--no-dev",
+                ]
+            )
             reqs = await result.data.workspace.read_file("requirements.txt")
             if reqs:
                 ctx.files["requirements.txt"] = reqs
-
 
         llm = get_best_coding_llm_client()
         workspace = await Workspace.create(
@@ -192,23 +196,71 @@ class FSMApplication:
             ],
         )
 
-        nicegui_actor = NiceguiActor(
+        data_actor = NiceguiActor(
             llm=llm,
             workspace=workspace,
             beam_width=3,
             max_depth=50,
+            system_prompt=playbooks.DATA_MODEL_SYSTEM_PROMPT,
+        )
+        app_actor = NiceguiActor(
+            llm=llm,
+            workspace=workspace.clone(),
+            beam_width=3,
+            max_depth=50,
+            system_prompt=playbooks.APPLICATION_SYSTEM_PROMPT,
         )
 
         # Define state machine states
         states = State[ApplicationContext, FSMEvent](
             on={
-                FSMEvent("CONFIRM"): FSMState.APPLICATION,
+                FSMEvent("CONFIRM"): FSMState.DATA_MODEL_GENERATION,
                 FSMEvent("FEEDBACK"): FSMState.APPLY_FEEDBACK,
             },
             states={
-                FSMState.APPLICATION: State(
+                FSMState.DATA_MODEL_GENERATION: State(
                     invoke={
-                        "src": nicegui_actor,
+                        "src": data_actor,
+                        "input_fn": lambda ctx: (
+                            ctx.files,
+                            ctx.feedback_data or ctx.user_prompt,
+                        ),
+                        "on_done": {
+                            "target": FSMState.REVIEW_DATA_MODEL,
+                            "actions": [update_node_files],
+                        },
+                        "on_error": {
+                            "target": FSMState.FAILURE,
+                            "actions": [set_error],
+                        },
+                    },
+                ),
+                FSMState.REVIEW_DATA_MODEL: State(
+                    on={
+                        FSMEvent("CONFIRM"): FSMState.APPLICATION_GENERATION,
+                        FSMEvent("FEEDBACK"): FSMState.DATA_MODEL_APPLY_FEEDBACK,
+                    },
+                ),
+                FSMState.DATA_MODEL_APPLY_FEEDBACK: State(
+                    invoke={
+                        "src": data_actor,
+                        "input_fn": lambda ctx: (
+                            ctx.files,
+                            ctx.feedback_data,
+                        ),
+                        "on_done": {
+                            "target": FSMState.REVIEW_DATA_MODEL,
+                            "actions": [update_node_files],
+                        },
+                        "on_error": {
+                            "target": FSMState.FAILURE,
+                            "actions": [set_error],
+                        },
+                    },
+                ),
+                FSMState.APPLICATION_GENERATION: State(
+                    invoke={
+                        "src": app_actor,
                         "input_fn": lambda ctx: (
                             ctx.files,
                             ctx.feedback_data or ctx.user_prompt,
@@ -231,14 +283,14 @@ class FSMApplication:
                 ),
                 FSMState.APPLY_FEEDBACK: State(
                     invoke={
-                        "src": nicegui_actor,
+                        "src": app_actor,
                         "input_fn": lambda ctx: (
                             ctx.files,
                             ctx.feedback_data,
                         ),
                         "on_done": {
                             "target": FSMState.COMPLETE,
-                            "actions": [update_node_files],
+                            "actions": [update_node_files, export_requirements],
                         },
                         "on_error": {
                             "target": FSMState.FAILURE,
@@ -290,6 +342,8 @@ class FSMApplication:
     @property
     def state_output(self) -> dict:
         match self.current_state:
+            case FSMState.REVIEW_DATA_MODEL:
+                return {"data_models": self.truncated_files}
             case FSMState.REVIEW_APPLICATION:
                 return {"application": self.truncated_files}
             case FSMState.COMPLETE:
@@ -306,7 +360,7 @@ class FSMApplication:
     def available_actions(self) -> dict[str, str]:
         actions = {}
         match self.current_state:
-            case FSMState.REVIEW_APPLICATION:
+            case FSMState.REVIEW_DATA_MODEL | FSMState.REVIEW_APPLICATION:
                 actions = {"confirm": "Accept current output and continue"}
                 logger.debug(
                     f"Review state detected: {self.current_state}, offering confirm action"
