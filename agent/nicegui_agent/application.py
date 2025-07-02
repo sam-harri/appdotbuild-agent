@@ -108,10 +108,11 @@ class FSMApplication:
     def base_execution_plan(cls) -> str:
         return "\n".join(
             [
-                "1. Data model generation - Define data structures, schemas, and models",
-                "2. Application generation - Implement UI components and application logic",
+                "1. Data model generation - Define data structures, schemas, and models. ",
+                "2. Application generation - Implement UI components and application logic. ",
                 "",
-                "The result application will be based on Python and NiceGUI framework. The application can include various UI components, event handling, and state management.",
+                "The result application will be based on Python and NiceGUI framework. Persistent data will be stored in Postgres with SQLModel ORM. "
+                "The application can include various UI components, event handling, and state management.",
             ]
         )
 
@@ -153,7 +154,7 @@ class FSMApplication:
             logger.exception("Setting error in context:", exc_info=error)
             ctx.error = str(error)
 
-        async def export_requirements(
+        async def run_final_steps(
             ctx: ApplicationContext, result: Node[BaseData]
         ) -> None:
             await result.data.workspace.exec_mut(
@@ -171,6 +172,16 @@ class FSMApplication:
             reqs = await result.data.workspace.read_file("requirements.txt")
             if reqs:
                 ctx.files["requirements.txt"] = reqs
+
+            await result.data.workspace.exec_mut([
+                "uv",
+                "run",
+                "ruff",
+                "check",
+                ".",
+                "--fix",
+            ])
+
 
         llm = get_best_coding_llm_client()
         workspace = await Workspace.create(
@@ -203,6 +214,7 @@ class FSMApplication:
             max_depth=50,
             system_prompt=playbooks.DATA_MODEL_SYSTEM_PROMPT,
         )
+        # ToDo: propagate crucial template files to DATA_MODEL_SYSTEM_PROMPT so they're cached
         app_actor = NiceguiActor(
             llm=llm,
             workspace=workspace.clone(),
@@ -267,7 +279,7 @@ class FSMApplication:
                         ),
                         "on_done": {
                             "target": FSMState.REVIEW_APPLICATION,
-                            "actions": [update_node_files, export_requirements],
+                            "actions": [update_node_files, run_final_steps],
                         },
                         "on_error": {
                             "target": FSMState.FAILURE,
@@ -290,7 +302,7 @@ class FSMApplication:
                         ),
                         "on_done": {
                             "target": FSMState.COMPLETE,
-                            "actions": [update_node_files, export_requirements],
+                            "actions": [update_node_files, run_final_steps],
                         },
                         "on_error": {
                             "target": FSMState.FAILURE,
