@@ -8,18 +8,41 @@
 
 ## What it builds
 
-- **Full-stack web apps** with Bun, React, Vite, Fastify and Drizzle
-- **Neon Postgres database** provisioned instantly via API
+We're currently supporting the following application types:
+
+### tRPC CRUD Web Applications
+
+- **Full-stack web apps** with Bun, React, Vite, Fastify, tRPC and Drizzle;
+- **Automatic validation** with ESLint, TypeScript, and runtime verification;
 - **Applications tested** ahead of generation with smoke tests using Playwright
+
+### Data-oriented Applications
+
+- **Data apps** with Python + NiceGUI + SQLModel stack - perfect for dashboards and data visualization;
+- **Automatic validation** using pytest, ruff, pyright, and runtime verification;
+- **Additional packages management** with uv;
+
+All applications support:
+- **Neon Postgres database** provisioned instantly via API
 - **GitHub repository** with complete source code
-- **CI/CD and deployment** via the [app.build platform](https://github.com/appdotbuild/platform)
-- **Automatic validation** with ESLint, TypeScript, and runtime verification
+- **CI/CD and deployment** via the [app.build platform](https://github.com/appdotbuild/platform).
+
+New application types are work in progress, stay tuned for updates!
 
 ## Try it
 
+### Via the [managed service](https://app.build)
+
 ```bash
+# for tRPC CRUD apps
 npx @app.build/cli
+
+for Python/NiceGUI apps
+npx @app.build/cli --template=python
 ```
+
+### Locally
+Local usage and development instructions are available in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Architecture
 
@@ -40,10 +63,6 @@ This is the **agent** repository containing the core code generation engine and 
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and contribution guidelines.
-
-## Running locally
-
-Local development instructions are available in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 
