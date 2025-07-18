@@ -16,6 +16,12 @@ We're currently supporting the following application types:
 - **Automatic validation** with ESLint, TypeScript, and runtime verification;
 - **Applications tested** ahead of generation with smoke tests using Playwright
 
+### Laravel Web Applications (Alpha Version)
+
+- **Full-stack web apps** with Laravel, React, TypeScript, Tailwind CSS, and Inertia.js;
+- **Modern Laravel 12** with PHP 8+ features and strict typing;
+- Designed to become production-ready soon with authentication, validation, code style enforcement and testing infrastructure;
+
 ### Data-oriented Applications
 
 - **Data apps** with Python + NiceGUI + SQLModel stack - perfect for dashboards and data visualization;
