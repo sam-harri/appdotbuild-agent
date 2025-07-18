@@ -50,6 +50,12 @@ npx @app.build/cli --template=python
 ### Locally
 Local usage and development instructions are available in [CONTRIBUTING.md](CONTRIBUTING.md).
 
+### Local Models with Ollama (expreimental)
+
+Want to run everything locally without API keys? We  added experimental support [Ollama](https://ollama.ai) for local model inference. Set up Ollama, pull your preferred models, and run the agent completely offline. See [PROJECT_GUIDELINES.md](PROJECT_GUIDELINES.md) for detailed setup instructions and recommended models.
+
+We are open for you contributions in better supporting local models. Feel free to send you PRs!
+
 ## Architecture
 
 This agent doesn't generate entire applications at once. Instead, it breaks down app creation into small, well-scoped tasks that run in isolated sandboxes:
