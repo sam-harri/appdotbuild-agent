@@ -126,7 +126,7 @@ class Workspace:
         diff_output = (
             await start.with_directory(".", self.ctr.directory("."))
             .with_exec(["git", "add", "."])
-            .with_exec(["git", "diff", "HEAD"])
+            .with_exec(["git", "diff", "--cached", "HEAD"])
             .stdout()
         )
 
