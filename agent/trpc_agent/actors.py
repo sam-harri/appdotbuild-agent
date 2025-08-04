@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from core.base_node import Node
 from core.workspace import Workspace
-from core.actors import BaseData, FileOperationsActor
+from core.actors import BaseData, FileOperationsActor, AgentSearchFailedException
 from llm.common import AsyncLLM, Message, TextRaw, Tool
 from trpc_agent import playbooks
 from trpc_agent.playwright import PlaywrightRunner, drizzle_push
@@ -124,7 +124,10 @@ class TrpcActor(FileOperationsActor):
 
             solution = await self._generate_draft(user_prompt)
             if not solution:
-                raise ValueError("Data model generation failed")
+                raise AgentSearchFailedException(
+                    agent_name="TrpcActor",
+                    message="Data model generation failed"
+                )
 
             await notify_stage(
                 self.event_callback,
@@ -212,7 +215,10 @@ class TrpcActor(FileOperationsActor):
         )
 
         if not solution:
-            raise ValueError("Edit failed to find a solution")
+            raise AgentSearchFailedException(
+                agent_name="TrpcActor",
+                message="Edit failed to find a solution"
+            )
 
         await notify_stage(
             self.event_callback,
@@ -456,7 +462,6 @@ class TrpcActor(FileOperationsActor):
 
     async def eval_node(self, node: Node[BaseData], user_prompt: str) -> bool:
         """Context-aware node evaluation."""
-
         # First, process any tool uses
         tool_results, _ = await self.run_tools(node, user_prompt)
         if tool_results:
