@@ -250,6 +250,11 @@ class TrpcActor(FileOperationsActor):
             await notify_if_callback(
                 self.event_callback, "✅ Schema and types generated!", "draft complete"
             )
+        else:
+            raise AgentSearchFailedException(
+                agent_name="TrpcActor",
+                message="Draft generation failed - no solution found",
+            )
 
         return solution
 
@@ -331,10 +336,16 @@ class TrpcActor(FileOperationsActor):
                     if solution:
                         results[f"handler_{handler_name}"] = solution
                         logger.info(f"Handler {handler_name} completed")
+                    else:
+                        await notify_if_callback(
+                            self.event_callback,
+                            f"💥 Handler {handler_name} failed to generate",
+                            "handler failure",
+                        )
 
         await notify_if_callback(
             self.event_callback,
-            "✅ All backend handlers generated!",
+            "✅ Backend handlers generation finished!",
             "handlers complete",
         )
 
@@ -384,6 +395,12 @@ class TrpcActor(FileOperationsActor):
                 self.event_callback,
                 "✅ Frontend application generated!",
                 "frontend complete",
+            )
+        else:
+            await notify_if_callback(
+                self.event_callback,
+                "💥 Frontend failed to generate, keeping the template page as is",
+                "handler failure",
             )
 
     async def _search_single_node(
@@ -601,7 +618,7 @@ class TrpcActor(FileOperationsActor):
             ["bun", "run", "tsc", "--noEmit"], cwd="server"
         )
         if result.exit_code != 0:
-            error_output = result.stdout or result.stderr
+            error_output = f"{result.stdout}\n{result.stderr}"
             return f"TypeScript errors (backend):\n{error_output}"
         return None
 
@@ -611,7 +628,7 @@ class TrpcActor(FileOperationsActor):
             ["bun", "run", "tsc", "-p", "tsconfig.app.json", "--noEmit"], cwd="client"
         )
         if result.exit_code != 0:
-            error_output = result.stdout or result.stderr
+            error_output = f"{result.stdout}\n{result.stderr}"
             return f"TypeScript errors (frontend):\n{error_output}"
         return None
 
@@ -621,7 +638,7 @@ class TrpcActor(FileOperationsActor):
             node.data.workspace.client, node.data.workspace.ctr, postgresdb=None
         )
         if result.exit_code != 0:
-            error_output = result.stderr or result.stdout
+            error_output = f"{result.stdout}\n{result.stderr}"
             return f"Drizzle errors:\n{error_output}"
         return None
 
@@ -629,8 +646,13 @@ class TrpcActor(FileOperationsActor):
         """Run frontend build check."""
         result = await node.data.workspace.exec(["bun", "run", "build"], cwd="client")
         if result.exit_code != 0:
-            error_output = result.stdout or result.stderr
+            error_output = f"{result.stdout}\n{result.stderr}"
             return f"Build errors:\n{error_output}"
+
+        result = await node.data.workspace.exec(["bun", "run", "lint"], cwd="client")
+        if result.exit_code != 0:
+            error_output = f"{result.stdout}\n{result.stderr}"
+            return f"Lint errors:\n{error_output}\n"
         return None
 
     async def run_test_check(
