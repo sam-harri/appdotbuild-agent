@@ -152,16 +152,14 @@ class FSMApplication:
             base_image="ghcr.io/astral-sh/uv:python3.12-bookworm",  # uv + CPython on Debian
             context=client.host().directory("/home/agent2/agent/sam_agent/template"), # contains package.json, client/, server/
             setup_cmd=[
-                # Bun (install to PATH)
-                ["bash","-lc","apt-get update && apt-get install -y curl ca-certificates git build-essential pkg-config postgresql-client && rm -rf /var/lib/apt/lists/*"],
+                ["bash","-lc","apt-get update && apt-get install -y curl ca-certificates git make pkg-config && rm -rf /var/lib/apt/lists/*"],
                 ["bash","-lc","curl -fsSL https://bun.sh/install | bash"],
                 ["bash","-lc","install -m 0755 -D /root/.bun/bin/bun /usr/local/bin/bun"],
-                ["bash","-lc","bun run sync"],
+                ["bash","-lc","make sync"],
             ],
         )
-        print(await workspace.ctr.with_exec(["bash","-lc","bun --version"]).stdout())
-        print(await workspace.ctr.with_exec(["bash","-lc","uv --version"]).stdout())
-        print(await workspace.ctr.with_exec(["bash","-lc","psql --version"]).stdout())
+        logger.info(await workspace.ctr.with_exec(["bash","-lc","bun --version"]).stdout())
+        logger.info(await workspace.ctr.with_exec(["bash","-lc","uv --version"]).stdout())
         
         logger.info("WORKSPACE CREATED")
 

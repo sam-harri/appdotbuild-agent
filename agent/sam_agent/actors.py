@@ -1,17 +1,17 @@
 import anyio
 import jinja2
 import logging
+import dagger
 import os
 from typing import Optional, Callable, Awaitable
 from dataclasses import dataclass
-
+from core.workspace import ExecResult
 from core.base_node import Node
 from core.workspace import Workspace
 from core.actors import BaseData, FileOperationsActor, AgentSearchFailedException
 from llm.common import AsyncLLM, Message, TextRaw, Tool, ToolUse, ToolUseResult
 from sam_agent import playbooks
-from sam_agent.playwright import alembic_push
-# from sam_agent.playwright import PlaywrightRunner, drizzle_push
+from core.postgres_utils import create_postgres_service, pg_health_check_cmd
 from core.notification_utils import notify_if_callback, notify_stage
 
 logger = logging.getLogger(__name__)
@@ -203,7 +203,7 @@ class SamActor(FileOperationsActor):
             allowed=self.paths.files_allowed_draft + self.paths.files_allowed_frontend,
             protected=self.paths.files_protected_frontend,
         )
-        await workspace.exec_mut(["bun", "run", "sync"]) # sync deps
+        await workspace.exec_mut(["make", "sync"]) # sync deps
         self.workspace = workspace
 
         # Build context with relevant files
@@ -291,7 +291,7 @@ class SamActor(FileOperationsActor):
 
         results: dict[str, Node[BaseData]] = {}
 
-        await self.workspace.exec_mut(["bun", "run", "sync"]) # sync deps from draft stage
+        await self.workspace.exec_mut(["make", "sync"]) # sync deps from draft stage
         async with anyio.create_task_group() as tg:
             # Start frontend generation
             tg.start_soon(
@@ -639,7 +639,7 @@ class SamActor(FileOperationsActor):
     async def run_py_backend_check(self, node: Node[BaseData]) -> str | None:
         """Run TypeScript compilation check for backend."""
         result = await node.data.workspace.exec(
-            ["bun", "run", "check:py:syntax"]
+            ["make", "check-py-syntax"]
         )
         if result.exit_code != 0:
             error_output = f"{result.stdout}\n{result.stderr}"
@@ -649,7 +649,7 @@ class SamActor(FileOperationsActor):
     async def run_tsc_frontend_check(self, node: Node[BaseData]) -> str | None:
         """Run TypeScript compilation check for frontend."""
         result = await node.data.workspace.exec(
-            ["bun", "run", "check:ts"]
+            ["make", "check-ts"]
         )
         if result.exit_code != 0:
             error_output = f"{result.stdout}\n{result.stderr}"
@@ -668,12 +668,12 @@ class SamActor(FileOperationsActor):
 
     async def run_build_check(self, node: Node[BaseData]) -> str | None:
         """Run frontend build check."""
-        result = await node.data.workspace.exec(["bun", "run", "client:build"])
+        result = await node.data.workspace.exec(["make", "client-build"])
         if result.exit_code != 0:
             error_output = f"{result.stdout}\n{result.stderr}"
             return f"Build errors:\n{error_output}"
 
-        result = await node.data.workspace.exec(["bun", "run", "client:lint"])
+        result = await node.data.workspace.exec(["make", "client-lint"])
         if result.exit_code != 0:
             error_output = f"{result.stdout}\n{result.stderr}"
             return f"Lint errors:\n{error_output}\n"
@@ -685,30 +685,7 @@ class SamActor(FileOperationsActor):
         """Run test checks - specific handler or all tests with real database."""
 
         return None
-        # prepare test command
-        if handler_name:
-            test_cmd = ["bun", "test", f"src/tests/{handler_name}.test.ts"]
-            test_context = f"handler '{handler_name}'"
-        else:
-            test_cmd = ["bun", "test"]
-            test_context = "all tests"
-
-        # run tests with postgres service
-        result = await node.data.workspace.exec_with_pg(test_cmd, cwd="server")
-        logger.info(f"Test execution result for {test_context}: {result.exit_code}")
-
-        if result.exit_code != 0:
-            error_output = result.stderr
-            return f"Test errors:\n{error_output}"
-        return None
-
-    # async def run_playwright_check(
-    #     self, node: Node[BaseData], mode: str = "client"
-    # ) -> list[str] | None:
-    #     """Run Playwright UI validation."""
-    #     feedback = await self.playwright.evaluate(node, self._user_prompt, mode=mode)
-    #     return feedback if feedback else None
-
+        
     async def run_checks(self, node: Node[BaseData], user_prompt: str) -> str | None:
         """Run context-aware validation checks based on node context."""
         context = node.data.context
@@ -933,24 +910,18 @@ class SamActor(FileOperationsActor):
                 packages = tool_use.input["packages"]  # pyright: ignore[reportIndexIssue]
                 target = tool_use.input["target"]  # pyright: ignore[reportIndexIssue]
 
-                match target:
-                    case "server":
-                        cwd = "server"
-                    case "client":
-                        cwd = "client"
-                    case other:
-                        return ToolUseResult.from_tool_use(
+                if target != "client":
+                    return ToolUseResult.from_tool_use(
                             tool_use,
-                            f"Invalid target: {other}. Must be 'server' or 'client'",
-                            is_error=True,
-                        )
+                        f"Invalid target: {target}. Must be 'client'",
+                        is_error=True,
+                    )
 
-                node.data.workspace.cwd(cwd)
+                node.data.workspace.cwd("client")
                 exec_res = await node.data.workspace.exec_mut(
                     ["bun", "add", " ".join(packages)]
                 )
-                node.data.workspace.cwd("/app")
-                await node.data.workspace.exec_mut(["bun", "install"]) # update root lockfile
+                await node.data.workspace.exec_mut(["bun", "install"]) # update lockfile
                 if exec_res.exit_code != 0:
                     return ToolUseResult.from_tool_use(
                         tool_use,
@@ -958,13 +929,13 @@ class SamActor(FileOperationsActor):
                         is_error=True,
                     )
                 else:
-                    package_path = f"{cwd}/package.json"
+                    package_path = "client/package.json"
                     node.data.files.update(
                         {
                             package_path: await node.data.workspace.read_file(
                                 package_path
                             ),
-                            "bun.lock": await node.data.workspace.read_file("bun.lock")
+                            "bun.lock": await node.data.workspace.read_file("client/bun.lock")
                         }
                     )
                     return ToolUseResult.from_tool_use(tool_use, "success")
@@ -989,3 +960,28 @@ class SamActor(FileOperationsActor):
             },
         ]
         return tools # type: ignore
+
+async def alembic_push(
+    client: dagger.Client, ctr: dagger.Container, postgresdb: dagger.Service | None
+) -> ExecResult:
+    """Run drizzle-kit push with postgres service."""
+
+    if postgresdb is None:
+        postgresdb = create_postgres_service(client)
+
+    base_ctr = (
+        ctr.with_exec([
+            "bash", "-lc",
+            "apt-get update && "
+            "DEBIAN_FRONTEND=noninteractive apt-get install -y postgresql-client && "
+            "rm -rf /var/lib/apt/lists/*"
+        ])
+        .with_service_binding("postgres", postgresdb)
+        .with_env_variable(
+            "APP_DATABASE_URL", "postgres+asyncpg://postgres:postgres@postgres:5432/postgres"
+        )
+        .with_exec(pg_health_check_cmd())
+    )
+
+    push_ctr = base_ctr.with_exec(["bash", "-lc", "make db-push"])
+    return await ExecResult.from_ctr(push_ctr)

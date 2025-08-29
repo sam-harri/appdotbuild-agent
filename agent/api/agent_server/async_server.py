@@ -21,6 +21,7 @@ from laravel_agent.agent_session import LaravelAgentSession
 import uvicorn
 from fire import Fire
 import os
+from sam_agent.application import FSMApplication
 
 # Disable dagger telemetry
 os.environ["DO_NOT_TRACK"] = "1"
@@ -43,9 +44,10 @@ from api.agent_server.models import (
     ExternalContentBlock,
 )
 from api.agent_server.interface import AgentInterface
+from api.base_agent_session import AgentSession
 from trpc_agent.agent_session import TrpcAgentSession
 from nicegui_agent.agent_session import NiceguiAgentSession
-from sam_agent.agent_session import SamAgentSession
+from api.base_agent_session import AgentSession
 from api.agent_server.template_diff_impl import TemplateDiffAgentImplementation
 from api.config import CONFIG
 
@@ -135,6 +137,10 @@ class SessionManager:
         session_id = f"{request.application_id}:{request.trace_id}"
 
         logger.info(f"Creating new agent session for {session_id}")
+        if agent_class == AgentSession: # super hacky but my core ideas is that if you dont need to extend the agent session you shouldnt need to create a superclass of the BaseAgentSession
+            # however, the Superclass is needed to pass the fsm_application_class to the BaseAgentSession so Im just adding it here ad-hoc
+            # ideally in the agent declaration there would be some logic to attach a fsm_application_class if you use the AgentSession
+            kwargs["fsm_application_class"] = FSMApplication
         agent = agent_class(
             client=client,
             application_id=request.application_id,
@@ -342,7 +348,7 @@ async def message(
             "trpc_agent": TrpcAgentSession,
             "nicegui_agent": NiceguiAgentSession,
             "laravel_agent": LaravelAgentSession,
-            "sam_agent": SamAgentSession,
+            "sam_agent": AgentSession,
         }
 
         if template_id not in agent_types:

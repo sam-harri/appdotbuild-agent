@@ -470,3 +470,18 @@ class BaseAgentSession(AgentInterface, ABC):
             data=event.model_dump(),
         )
         self._sse_counter += 1
+
+
+class AgentSession(BaseAgentSession):
+    def __init__(
+        self,
+        client: dagger.Client,
+        fsm_application_class: Any, # TODO come up with interface for fsm application
+        application_id: str | None = None,
+        trace_id: str | None = None,
+        settings: Optional[Dict[str, Any]] = None,
+    ):
+        """Initialize a new agent session"""
+        logger.info("Initializing AgentSession with no added functionality")
+        super().__init__(client, fsm_application_class, application_id, trace_id, settings)
+        logger.info("AgentSession initialized")
