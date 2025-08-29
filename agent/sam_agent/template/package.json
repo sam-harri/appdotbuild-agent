@@ -1,0 +1,31 @@
+{
+  "name": "app-build",
+  "private": true,
+  "workspaces": ["client"],
+  "scripts": {
+    "dev:server": "bash -lc 'cd server && uv run uvicorn --factory app.main:create_app --reload --port 2022'",
+    "dev:client": "bun run --filter app-build-client dev",
+    "dev:all": "bash -lc '(bun run dev:server & bun run dev:client); wait'",
+
+    "db:migrate": "bash -lc 'cd server && uv run alembic upgrade head'",
+    "db:revision": "bash -lc 'cd server && uv run alembic revision --autogenerate -m \"update\"'",
+    "db:push": "bash -lc 'bun run db:revision && bun run db:migrate'",
+
+    "check:py:syntax": "bash -lc 'cd server && uv run python -m compileall -q app || (echo \"❌ Python syntax errors\"; exit 1)'",
+    "check:py:health": "curl http://localhost:2022/healthcheck",
+    "check:ts": "bash -lc 'bunx --bun tsc -p client/tsconfig.json --noEmit'",
+
+    "check": "bash -lc 'bun run check:py:syntax && bun run check:ts'",
+
+    "sync:client": "bash -lc 'cd client && bun install'",
+    "sync:server": "bash -lc 'cd server && uv sync '",
+    "sync": "bash -lc 'bun run sync:client && bun run sync:server'",
+
+    "client:build": "bun run --filter app-build-client build",
+    "client:lint": "bun run --filter app-build-client lint"
+  },
+  "devDependencies": {
+    "@types/node": "22.15.14",
+    "typescript": "^5.6.0"
+  }
+}

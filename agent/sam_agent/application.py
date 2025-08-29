@@ -12,7 +12,7 @@ from core.actors import BaseData
 from core.base_node import Node
 from core.statemachine import MachineCheckpoint
 from core.workspace import Workspace
-from trpc_agent.actors import TrpcActor
+from sam_agent.actors import SamActor
 import dagger
 
 # Set up logging
@@ -98,16 +98,16 @@ class FSMApplication:
     def base_execution_plan(cls, settings: dict[str, Any] | None = None) -> str:
         return "\n".join(
             [
-                "1. Data model generation - Define TypeScript types, database schema, and API interface",
+                "1. Data model generation - Define Python types, database schema, and API interface",
                 "2. Application generation - Implement backend handlers and React frontend",
                 "",
-                "The result application will be based on TypeScript, Drizzle, tRPC and React. The list of available libraries is limited but sufficient to build CRUD apps.",
+                "The result application will be based on Python, Alembic, Bun and React. The list of available libraries is limited but sufficient to build CRUD apps.",
             ]
         )
 
     @classmethod
     def template_path(cls) -> str:
-        return "./trpc_agent/template"
+        return "/home/agent2/agent/sam_agent/template"
 
     @classmethod
     async def start_fsm(
@@ -146,32 +146,29 @@ class FSMApplication:
         llm = get_best_coding_llm_client()
         vlm = get_vision_llm_client()
 
+        logger.info("CREATING WORKSPACE")
         workspace = await Workspace.create(
             client=client,
-            base_image="oven/bun:1.2.5-alpine",
-            context=client.host().directory("./sam_agent/template"),
+            base_image="ghcr.io/astral-sh/uv:python3.12-bookworm",  # uv + CPython on Debian
+            context=client.host().directory("/home/agent2/agent/sam_agent/template"), # contains package.json, client/, server/
             setup_cmd=[
-                # update and install deps needed for uv
-                ["apk", "update"],
-                ["apk", "add", "--no-cache", "curl", "ca-certificates", "supervisor"],
-                # install uv into /usr/local/bin
-                [
-                    "sh", "-lc",
-                    "curl -LsSf https://astral.sh/uv/install.sh | "
-                    "env UV_UNMANAGED_INSTALL=/usr/local/bin sh"
-                ],
-                # verify uv install (optional)
-                ["uv", "--version"],
-                # your existing setup
-                ["bun", "run sync"],
+                # Bun (install to PATH)
+                ["bash","-lc","apt-get update && apt-get install -y curl ca-certificates git build-essential pkg-config postgresql-client && rm -rf /var/lib/apt/lists/*"],
+                ["bash","-lc","curl -fsSL https://bun.sh/install | bash"],
+                ["bash","-lc","install -m 0755 -D /root/.bun/bin/bun /usr/local/bin/bun"],
+                ["bash","-lc","bun run sync"],
             ],
         )
+        print(await workspace.ctr.with_exec(["bash","-lc","bun --version"]).stdout())
+        print(await workspace.ctr.with_exec(["bash","-lc","uv --version"]).stdout())
+        print(await workspace.ctr.with_exec(["bash","-lc","psql --version"]).stdout())
+        
+        logger.info("WORKSPACE CREATED")
 
-
-        event_callback = settings.get("event_callback") if settings else None
+        event_callback = settings.get("event_callback") if settings else None # force evaluation of container and check all is good :)
 
         # Create separate actor instances for data model, application, and editing
-        data_model_actor = TrpcActor(
+        data_model_actor = SamActor(
             llm=llm,
             vlm=vlm,
             workspace=workspace.clone(),
@@ -180,7 +177,7 @@ class FSMApplication:
             event_callback=event_callback,
         )
 
-        app_actor = TrpcActor(
+        app_actor = SamActor(
             llm=llm,
             vlm=vlm,
             workspace=workspace.clone(),
@@ -189,7 +186,7 @@ class FSMApplication:
             event_callback=event_callback,
         )
 
-        edit_actor = TrpcActor(
+        edit_actor = SamActor(
             llm=llm,
             vlm=vlm,
             workspace=workspace.clone(),
@@ -409,7 +406,7 @@ class FSMApplication:
             )
 
         # Add template files (they will appear in diff if not in snapshot)
-        template_dir = self.client.host().directory("./trpc_agent/template")
+        template_dir = self.client.host().directory("/home/agent2/agent/sam_agent/template")
         start = start.with_directory(".", template_dir)
 
         # Add FSM context files on top

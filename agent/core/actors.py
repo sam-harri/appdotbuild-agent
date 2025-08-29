@@ -545,11 +545,14 @@ class FileOperationsActor(BaseActor, LLMActor, ABC):
                         result.append(ToolUseResult.from_tool_use(block, "success"))
 
                     case "complete":
+                        logger.info("COMPLETING NODE!!!")
                         if not self.has_modifications(node):
                             raise ValueError(
                                 "Can not complete without writing any changes."
                             )
+                        logger.info("RUNNING CHECKS")
                         check_err = await self.run_checks(node, user_prompt)
+                        logger.info(f"CHECKS RESULT: {check_err}")
                         if check_err:
                             logger.info(f"Failed to complete: {check_err}")
                         result.append(
@@ -578,12 +581,12 @@ class FileOperationsActor(BaseActor, LLMActor, ABC):
                 logger.info(f"Value error: {e}")
                 result.append(ToolUseResult.from_tool_use(block, str(e), is_error=True))
             except Exception as e:
-                # handle ExceptionGroup by unpacking recursively
                 if isinstance(e, BaseExceptionGroup):
                     all_exceptions = self._unpack_exception_group(e)
                     error_messages = []
                     for exc in all_exceptions:
                         logger.error(f"Exception in group: {type(exc).__name__}: {exc}")
+                        logger.error("Error when running tool %s", block.name, exc_info=True)
                         error_messages.append(f"{type(exc).__name__}: {str(exc)}")
                     combined_error = "Multiple errors occurred:\n" + "\n".join(
                         error_messages

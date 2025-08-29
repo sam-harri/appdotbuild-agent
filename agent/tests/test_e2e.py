@@ -132,6 +132,7 @@ async def run_e2e(
                     "nicegui_agent": "nicegui_agent/template",
                     "trpc_agent": "trpc_agent/template",
                     "laravel_agent": "laravel_agent/template",
+                    "sam_agent": "sam_agent/template",
                     None: "trpc_agent/template",  # default
                 }
 
@@ -202,7 +203,7 @@ async def run_e2e(
                             container_names["app_container_name"],
                         ],
                         ["db", "app"],
-                        timeout=60,
+                        timeout=240,
                         interval=1,
                     )
 

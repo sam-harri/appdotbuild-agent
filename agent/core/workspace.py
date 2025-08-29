@@ -170,10 +170,9 @@ class Workspace:
     @retry_transport_errors
     async def exec_with_pg(self, command: list[str], cwd: str = ".") -> ExecResult:
         postgresdb = create_postgres_service(self.client)
-
+        print("APK call debug log")
         return await ExecResult.from_ctr(
             self.ctr
-            .with_exec(["apk", "--update", "add", "postgresql-client"]) # TODO: might be not needed
             .with_service_binding("postgres", postgresdb)
             .with_env_variable("APP_DATABASE_URL", "postgresql://postgres:postgres@postgres:5432/postgres")
             .with_exec(["sh", "-c", "while ! pg_isready -h postgres -U postgres; do sleep 1; done"])

@@ -45,6 +45,7 @@ from api.agent_server.models import (
 from api.agent_server.interface import AgentInterface
 from trpc_agent.agent_session import TrpcAgentSession
 from nicegui_agent.agent_session import NiceguiAgentSession
+from sam_agent.agent_session import SamAgentSession
 from api.agent_server.template_diff_impl import TemplateDiffAgentImplementation
 from api.config import CONFIG
 
@@ -341,6 +342,7 @@ async def message(
             "trpc_agent": TrpcAgentSession,
             "nicegui_agent": NiceguiAgentSession,
             "laravel_agent": LaravelAgentSession,
+            "sam_agent": SamAgentSession,
         }
 
         if template_id not in agent_types:
