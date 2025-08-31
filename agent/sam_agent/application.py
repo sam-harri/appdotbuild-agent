@@ -74,7 +74,7 @@ class ApplicationContext(BaseApplicationContext, Context):
         return cls(**data)
 
 
-class FSMApplication:
+class SamFSMApplication:
     def __init__(
         self, client: dagger.Client, fsm: StateMachine[ApplicationContext, FSMEvent]
     ):
@@ -433,7 +433,7 @@ async def main(user_prompt="Minimal persistent counter application"):
     async with dagger.Connection(
         dagger.Config(log_output=open(os.devnull, "w"))
     ) as client:
-        fsm_app: FSMApplication = await FSMApplication.start_fsm(client, user_prompt)
+        fsm_app: SamFSMApplication = await SamFSMApplication.start_fsm(client, user_prompt)
 
         while fsm_app.current_state not in (FSMState.COMPLETE, FSMState.FAILURE):
             await fsm_app.fsm.send(FSMEvent("CONFIRM"))

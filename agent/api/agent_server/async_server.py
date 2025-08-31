@@ -14,6 +14,7 @@ from typing import AsyncGenerator
 from contextlib import asynccontextmanager
 
 import anyio
+from api.fsm_tools import FSMInterface
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -21,7 +22,7 @@ from laravel_agent.agent_session import LaravelAgentSession
 import uvicorn
 from fire import Fire
 import os
-from sam_agent.application import FSMApplication
+from sam_agent.application import SamFSMApplication
 
 # Disable dagger telemetry
 os.environ["DO_NOT_TRACK"] = "1"
@@ -137,10 +138,14 @@ class SessionManager:
         session_id = f"{request.application_id}:{request.trace_id}"
 
         logger.info(f"Creating new agent session for {session_id}")
-        if agent_class == AgentSession: # super hacky but my core ideas is that if you dont need to extend the agent session you shouldnt need to create a superclass of the BaseAgentSession
-            # however, the Superclass is needed to pass the fsm_application_class to the BaseAgentSession so Im just adding it here ad-hoc
-            # ideally in the agent declaration there would be some logic to attach a fsm_application_class if you use the AgentSession
-            kwargs["fsm_application_class"] = FSMApplication
+        if isinstance(agent_class, FSMInterface):
+            # core ideas is that if you dont need to extend the agent session you shouldnt need to create a superclass of the BaseAgentSession
+            # If you pass in a superclass of the BaseAgentSession, logic is the same as before
+            # but if you pass in an implementation of the FSMInterface, then it will simply use the AgentSession with no extra logic
+            logger.info(f"Using FSMInterface to create AgentSession with no extra logic")
+            kwargs["fsm_application_class"] = agent_class
+            agent_class = AgentSession
+
         agent = agent_class(
             client=client,
             application_id=request.application_id,
@@ -348,7 +353,8 @@ async def message(
             "trpc_agent": TrpcAgentSession,
             "nicegui_agent": NiceguiAgentSession,
             "laravel_agent": LaravelAgentSession,
-            "sam_agent": AgentSession,
+            # "sam_agent": AgentSession,
+            "sam_agent": SamFSMApplication,
         }
 
         if template_id not in agent_types:
