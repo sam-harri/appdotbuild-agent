@@ -141,253 +141,218 @@ app = create_app()
 """.strip()
 
 
-BASE_APP_TSX = """
-<file path="client/src/App.tsx">
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { useState, useEffect, useCallback } from 'react';
-import { api } from '@/utils/api';
+BASE_APP_VUE = """
+<file path="client/src/App.vue">
+<template>
+  <div class="container mx-auto p-4">
+    <h1 class="text-2xl font-bold mb-4">Product Management</h1>
 
-export interface Product {
-  id: string;
-  name: string;
-  description: string | null;
-  price: number;          
-  stock_quantity: number;
-  created_at: string;
-}
-
-export interface CreateProductInput {
-  name: string;
-  description: string | null;
-  price: number;
-  stock_quantity: number;
-}
-
-function App() {
-  const [products, setProducts] = useState<Product[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-
-  const [formData, setFormData] = useState<CreateProductInput>({
-    name: '',
-    description: null,
-    price: 0,
-    stock_quantity: 0,
-  });
-
-  // Fetch via REST
-  const loadProducts = useCallback(async () => {
-    try {
-      // Assumes you add api.getProducts() in utils/api.ts
-      const result = await api.getProducts();
-      setProducts(result);
-    } catch (error) {
-      console.error('Failed to load products:', error);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadProducts();
-  }, [loadProducts]);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsLoading(true);
-    try {
-      // Assumes you add api.createProduct() in utils/api.ts
-      const created = await api.createProduct(formData);
-      setProducts((prev) => [...prev, created]);
-      setFormData({
-        name: '',
-        description: null,
-        price: 0,
-        stock_quantity: 0,
-      });
-    } catch (error) {
-      console.error('Failed to create product:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  return (
-    <div className="container mx-auto p-4">
-      <h1 className="text-2xl font-bold mb-4">Product Management</h1>
-
-      <form onSubmit={handleSubmit} className="space-y-4 mb-8">
-        <Input
-          placeholder="Product name"
-          value={formData.name}
-          onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-            setFormData((prev) => ({ ...prev, name: e.target.value }))
-          }
-          required
-        />
-        <Input
-          placeholder="Description (optional)"
-          value={formData.description ?? ''}
-          onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-            setFormData((prev) => ({
-              ...prev,
-              description: e.target.value || null,
-            }))
-          }
-        />
-        <Input
-          type="number"
-          placeholder="Price"
-          value={Number.isFinite(formData.price) ? String(formData.price) : ''}
-          onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-            setFormData((prev) => ({
-              ...prev,
-              price: parseFloat(e.target.value) || 0,
-            }))
-          }
-          step="0.01"
-          min="0"
-          required
-        />
-        <Input
-          type="number"
-          placeholder="Stock quantity"
-          value={Number.isFinite(formData.stock_quantity) ? String(formData.stock_quantity) : ''}
-          onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-            setFormData((prev) => ({
-              ...prev,
-              stock_quantity: parseInt(e.target.value) || 0,
-            }))
-          }
-          min="0"
-          required
-        />
-        <Button type="submit" disabled={isLoading}>
-          {isLoading ? 'Creating...' : 'Create Product'}
-        </Button>
-      </form>
-
-      {products.length === 0 ? (
-        <p className="text-gray-500">No products yet. Create one above!</p>
-      ) : (
-        <div className="grid gap-4">
-          {products.map((product) => (
-            <div key={product.id} className="border p-4 rounded-md">
-              <h2 className="text-xl font-semibold">{product.name}</h2>
-              {product.description && (
-                <p className="text-gray-600">{product.description}</p>
-              )}
-              <div className="flex justify-between mt-2">
-                <span>${product.price.toFixed(2)}</span>
-                <span>In stock: {product.stock_quantity}</span>
-              </div>
-              <p className="text-xs text-gray-400 mt-2">
-                Created: {new Date(product.created_at).toLocaleDateString()}
-              </p>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-export default App;
-</file>
-""".strip()
-
-
-
-BASE_COMPONENT_EXAMPLE = """
-<file path="client/src/components/ProductForm.tsx">
-import { Input } from '@/components/ui/input';
-import { Button } from '@/components/ui/button';
-import { useState } from 'react';
-
-// Client-side input type (decoupled from server)
-export interface CreateProductInput {
-  name: string;
-  description: string | null;
-  price: number;
-  stock_quantity: number;
-}
-
-interface ProductFormProps {
-  onSubmit: (data: CreateProductInput) => Promise<void>;
-  isLoading?: boolean;
-}
-
-export function ProductForm({ onSubmit, isLoading = false }: ProductFormProps) {
-  const [formData, setFormData] = useState<CreateProductInput>({
-    name: '',
-    description: null,
-    price: 0,
-    stock_quantity: 0,
-  });
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    await onSubmit(formData);
-    // Reset form after successful submission
-    setFormData({
-      name: '',
-      description: null,
-      price: 0,
-      stock_quantity: 0,
-    });
-  };
-
-  return (
-    <form onSubmit={handleSubmit} className="space-y-4">
-      <Input
-        value={formData.name}
-        onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-          setFormData((prev) => ({ ...prev, name: e.target.value }))
-        }
+    <form @submit.prevent="handleSubmit" class="space-y-4 mb-8">
+      <input
+        v-model="formData.name"
         placeholder="Product name"
+        class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
         required
       />
-      <Input
-        value={formData.description ?? ''} // Fallback for null
-        onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-          setFormData((prev) => ({
-            ...prev,
-            description: e.target.value || null,
-          }))
-        }
+      <input
+        v-model="formData.description"
         placeholder="Description (optional)"
+        class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
       />
-      <Input
+      <input
+        v-model.number="formData.price"
         type="number"
-        value={Number.isFinite(formData.price) ? String(formData.price) : ''}
-        onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-          setFormData((prev) => ({
-            ...prev,
-            price: parseFloat(e.target.value) || 0,
-          }))
-        }
         placeholder="Price"
+        class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
         step="0.01"
         min="0"
         required
       />
-      <Input
+      <input
+        v-model.number="formData.stock_quantity"
         type="number"
-        value={Number.isFinite(formData.stock_quantity) ? String(formData.stock_quantity) : ''}
-        onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-          setFormData((prev) => ({
-            ...prev,
-            stock_quantity: parseInt(e.target.value) || 0,
-          }))
-        }
         placeholder="Stock quantity"
+        class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
         min="0"
         required
       />
-      <Button type="submit" disabled={isLoading}>
-        {isLoading ? 'Creating...' : 'Create Product'}
-      </Button>
+      <button
+        type="submit"
+        :disabled="isLoading"
+        class="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 disabled:opacity-50"
+      >
+        {{ isLoading ? 'Creating...' : 'Create Product' }}
+      </button>
     </form>
-  );
+
+    <div v-if="products.length === 0" class="text-gray-500">
+      No products yet. Create one above!
+    </div>
+    <div v-else class="grid gap-4">
+      <div
+        v-for="product in products"
+        :key="product.id"
+        class="border p-4 rounded-md"
+      >
+        <h2 class="text-xl font-semibold">{{ product.name }}</h2>
+        <p v-if="product.description" class="text-gray-600">
+          {{ product.description }}
+        </p>
+        <div class="flex justify-between mt-2">
+          <span>${{ product.price.toFixed(2) }}</span>
+          <span>In stock: {{ product.stock_quantity }}</span>
+        </div>
+        <p class="text-xs text-gray-400 mt-2">
+          Created: {{ new Date(product.created_at).toLocaleDateString() }}
+        </p>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, onMounted } from 'vue'
+import { api } from '@/utils/api'
+
+export interface Product {
+  id: string
+  name: string
+  description: string | null
+  price: number
+  stock_quantity: number
+  created_at: string
 }
+
+export interface CreateProductInput {
+  name: string
+  description: string | null
+  price: number
+  stock_quantity: number
+}
+
+const products = ref<Product[]>([])
+const isLoading = ref(false)
+
+const formData = ref<CreateProductInput>({
+  name: '',
+  description: null,
+  price: 0,
+  stock_quantity: 0,
+})
+
+const loadProducts = async () => {
+  try {
+    const result = await api.getProducts()
+    products.value = result
+  } catch (error) {
+    console.error('Failed to load products:', error)
+  }
+}
+
+onMounted(() => {
+  loadProducts()
+})
+
+const handleSubmit = async () => {
+  isLoading.value = true
+  try {
+    const created = await api.createProduct(formData.value)
+    products.value.push(created)
+    formData.value = {
+      name: '',
+      description: null,
+      price: 0,
+      stock_quantity: 0,
+    }
+  } catch (error) {
+    console.error('Failed to create product:', error)
+  } finally {
+    isLoading.value = false
+  }
+}
+</script>
+</file>
+""".strip()
+
+
+BASE_COMPONENT_VUE = """
+<file path="client/src/components/ProductForm.vue">
+<template>
+  <form @submit.prevent="handleSubmit" class="space-y-4">
+    <input
+      v-model="formData.name"
+      placeholder="Product name"
+      class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+      required
+    />
+    <input
+      v-model="formData.description"
+      placeholder="Description (optional)"
+      class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+    />
+    <input
+      v-model.number="formData.price"
+      type="number"
+      placeholder="Price"
+      class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+      step="0.01"
+      min="0"
+      required
+    />
+    <input
+      v-model.number="formData.stock_quantity"
+      type="number"
+      placeholder="Stock quantity"
+      class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+      min="0"
+      required
+    />
+    <button
+      type="submit"
+      :disabled="isLoading"
+      class="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 disabled:opacity-50"
+    >
+      {{ isLoading ? 'Creating...' : 'Create Product' }}
+    </button>
+  </form>
+</template>
+
+<script setup lang="ts">
+import { ref } from 'vue'
+
+export interface CreateProductInput {
+  name: string
+  description: string | null
+  price: number
+  stock_quantity: number
+}
+
+interface Props {
+  onSubmit: (data: CreateProductInput) => Promise<void>
+  isLoading?: boolean
+}
+
+const props = withDefaults(defineProps<Props>(), {
+  isLoading: false
+})
+
+const formData = ref<CreateProductInput>({
+  name: '',
+  description: null,
+  price: 0,
+  stock_quantity: 0,
+})
+
+const handleSubmit = async () => {
+  await props.onSubmit(formData.value)
+  formData.value = {
+    name: '',
+    description: null,
+    price: 0,
+    stock_quantity: 0,
+  }
+}
+</script>
 </file>
 """.strip()
 
@@ -634,16 +599,16 @@ Use the tools to create or modify the handler implementation and test files.
 
 FRONTEND_SYSTEM_PROMPT = f"""You are a software engineer. Follow these rules:
 
-- Generate a React frontend using Radix UI components.
+- Generate a Vue 3 frontend using Composition API with TypeScript.
 - All backend communication MUST use `fetch` via `client/src/utils/api.ts`.
-- Use Tailwind CSS for styling. Use Tailwind classes directly in JSX
+- Use Tailwind CSS for styling. Use Tailwind classes directly in template.
 - DO NOT CREATE NEW TAILWIND CLASSES OR USE @apply IN TAILWIND CSS, USE THE ONES PROVIDED BY THE LIBRARY
 
 Example App Component (uses api.ts):
-{BASE_APP_TSX}
+{BASE_APP_VUE}
 
 Example Nested Component:
-{BASE_COMPONENT_EXAMPLE}
+{BASE_COMPONENT_VUE}
 
 # Component Organization Guidelines
 - Create separate components when:
@@ -652,13 +617,12 @@ Example Nested Component:
   - Component has distinct responsibility (e.g., ProductForm, ProductList)
 - File structure:
   - Shared UI: `client/src/components/ui/`
-  - Feature components: `client/src/components/FeatureName.tsx`
-  - Complex features: `client/src/components/feature/FeatureName.tsx`
+  - Feature components: `client/src/components/FeatureName.vue`
+  - Complex features: `client/src/components/feature/FeatureName.vue`
 - Keep components focused on a single responsibility.
 
 # Visual Guidance
 - Adjust styles to match the user request's vibe. Corporate apps: default palette is fine. Playful apps: tasteful custom colors/emojis to improve engagement.
-
 
 # CRITICAL: API Integration & Type Matching
 - ALWAYS inspect actual API handlers (their response shape) before using fields.
@@ -668,20 +632,35 @@ Example Nested Component:
 - A reverse proxy (e.g. Nginx / Traefik) is configured to forward `/api/*` requests to the backend service running on a different port.
 - Always keep the health check endpoint `/api/health` in the API, keep it in the app, and log the status to the console.
 
-# Syntax & Common Errors
-- Double-check JSX syntax and imports.
-- Controlled inputs:
-  - Provide defined values always: `value={{formData.field ?? ''}}`
-  - Convert UI empty string → `null` before submit for nullable fields.
-- Selects: use meaningful defaults (e.g., `'all'`).
-- Dates & numbers: rely on proper types from the API. Format in the component (e.g., `price.toFixed(2)`).
+# Vue 3 Composition API Best Practices
+- Use `<script setup lang="ts">` for all components
+- Use `ref()` for reactive primitive values, `reactive()` for objects
+- Use `computed()` for derived state
+- Use `onMounted()` for lifecycle hooks
+- Use `defineProps<T>()` and `defineEmits<T>()` for component props/events
+- Use `v-model` for form inputs with proper TypeScript typing
 
-# React Hooks
-- Follow the Rules of Hooks:
-  - Put all used deps in `useEffect`/`useCallback`/`useMemo` arrays.
-  - Wrap async loaders in `useCallback` and call them from `useEffect`.
+# TypeScript Best Practices
+- Always provide explicit types for all reactive references and functions
+- Use proper Vue event types: `@click="(e: MouseEvent) => ..."`
+- Handle nullable values correctly in forms and displays
+- State initialization should match API return types exactly
 
-# 
+# React Hook Dependencies:
+- Follow React Hook rules strictly:
+  - Include all dependencies in useEffect/useCallback/useMemo arrays
+  - Wrap functions used in useEffect with useCallback if they use state/props
+  - Use empty dependency array `[]` only for mount-only effects
+  - Example pattern:
+    ```typescript
+    const loadData = useCallback(async () => {{
+      // data loading logic
+    }}, [dependency1, dependency2]);
+
+    useEffect(() => {{
+      loadData();
+    }}, [loadData]);
+    ```
 
 {TOOL_USAGE_RULES}
 """.strip()
@@ -696,19 +675,18 @@ Task:
 {{user_prompt}}
 """.strip()
 
-EDIT_ACTOR_SYSTEM_PROMPT = f"""
-You are software engineer.
+EDIT_ACTOR_SYSTEM_PROMPT = f"""You are software engineer.
 
 Working with frontend follow these rules:
-- Generate react frontend application using radix-ui components.
+- Generate Vue 3 frontend application using Composition API with TypeScript.
 - Backend communication is done using fetch from the client/src/utils/api.ts.
-- Use Tailwind CSS for styling. Use Tailwind classes directly in JSX. Avoid using @apply unless you need to create reusable component styles. When using @apply, only use it in @layer components, never in @layer base.
+- Use Tailwind CSS for styling. Use Tailwind classes directly in template. Avoid using @apply unless you need to create reusable component styles. When using @apply, only use it in @layer components, never in @layer base.
 
 Example App Component:
-{BASE_APP_TSX}
+{BASE_APP_VUE}
 
 Example Nested Component (showing import paths):
-{BASE_COMPONENT_EXAMPLE}
+{BASE_COMPONENT_VUE}
 
 # Component Organization Guidelines:
 - Create separate components when:
@@ -717,8 +695,8 @@ Example Nested Component (showing import paths):
   - Component has distinct responsibility (e.g., ProductForm, ProductList)
 - File structure:
   - Shared UI components: `client/src/components/ui/`
-  - Feature components: `client/src/components/FeatureName.tsx`
-  - Complex features: `client/src/components/feature/FeatureName.tsx`
+  - Feature components: `client/src/components/FeatureName.vue`
+  - Complex features: `client/src/components/feature/FeatureName.vue`
 - Keep components focused on single responsibility
 
 For the visual aspect, adjust the CSS to match the user prompt to keep the design consistent with the original request in terms of overall mood. E.g. for serious corporate business applications, default CSS is great; for more playful or nice applications, use custom colors, emojis, and other visual elements to make it more engaging.
@@ -745,50 +723,26 @@ For the visual aspect, adjust the CSS to match the user prompt to keep the desig
     ```
 - Access nested data correctly based on server's actual return structure
 
-# Syntax & Common Errors:
-- Double-check JSX syntax:
-  - Type annotations: `onChange={{(e: React.ChangeEvent<HTMLInputElement>) => ...}}`
-  - Import lists need proper commas: `import {{ A, B, C }} from ...`
-  - Component names have no spaces: `AlertDialogFooter` not `AlertDialog Footer`
+# Vue 3 Composition API Best Practices:
+- Use `<script setup lang="ts">` for all components
+- Use `ref()` for reactive primitive values, `reactive()` for objects
+- Use `computed()` for derived state
+- Use `onMounted()` for lifecycle hooks
+- Use `defineProps<T>()` and `defineEmits<T>()` for component props/events
+- Use `v-model` for form inputs with proper TypeScript typing
 - Handle nullable values in forms correctly:
-  - For controlled inputs, always provide a defined value: `value={{formData.field || ''}}`
-  - For nullable database fields, convert empty strings to null before submission:
-    ```typescript
-    onChange={{(e) => setFormData(prev => ({{
-      ...prev,
-      description: e.target.value || null // Empty string → null
-    }})}}
-    ```
-  - For select/dropdown components, use meaningful defaults: `value={{filter || 'all'}}` not empty string
+  - For controlled inputs, always provide a defined value: `v-model="formData.field || ''"`
+  - For nullable database fields, convert empty strings to null before submission
   - HTML input elements require string values, so convert null → '' for display, '' → null for storage
 - State initialization should match API return types exactly
 
 # TypeScript Best Practices:
-- Always provide explicit types for all callbacks:
-  - useState setters: `setData((prev: DataType) => ...)`
-  - Event handlers: `onChange={{(e: React.ChangeEvent<HTMLInputElement>) => ...}}`
-  - Array methods: `items.map((item: ItemType) => ...)`
+- Always provide explicit types for all reactive references and functions
 - For numeric values and dates from API:
   - Frontend receives proper number types - no additional conversion needed
   - Use numbers directly: `product.price.toFixed(2)` for display formatting
   - Date objects from backend can be used directly: `date.toLocaleDateString()`
 - NEVER use mock data or hardcoded values - always fetch real data from the API
-
-# React Hook Dependencies:
-- Follow React Hook rules strictly:
-  - Include all dependencies in useEffect/useCallback/useMemo arrays
-  - Wrap functions used in useEffect with useCallback if they use state/props
-  - Use empty dependency array `[]` only for mount-only effects
-  - Example pattern:
-    ```typescript
-    const loadData = useCallback(async () => {{
-      // data loading logic
-    }}, [dependency1, dependency2]);
-
-    useEffect(() => {{
-      loadData();
-    }}, [loadData]);
-    ```
 
 Working with backend follow these rules:
 

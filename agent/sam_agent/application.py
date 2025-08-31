@@ -99,9 +99,9 @@ class SamFSMApplication:
         return "\n".join(
             [
                 "1. Data model generation - Define Python types, database schema, and API interface",
-                "2. Application generation - Implement backend handlers and React frontend",
+                "2. Application generation - Implement backend handlers and Vue frontend",
                 "",
-                "The result application will be based on Python, Alembic, Bun and React. The list of available libraries is limited but sufficient to build CRUD apps.",
+                "The result application will be based on Python, Alembic, Bun and Vue. The list of available libraries is limited but sufficient to build CRUD apps.",
             ]
         )
 
@@ -149,8 +149,8 @@ class SamFSMApplication:
         logger.info("CREATING WORKSPACE")
         workspace = await Workspace.create(
             client=client,
-            base_image="ghcr.io/astral-sh/uv:python3.12-bookworm",  # uv + CPython on Debian
-            context=client.host().directory("/home/agent2/agent/sam_agent/template"), # contains package.json, client/, server/
+            base_image="ghcr.io/astral-sh/uv:python3.12-bookworm",
+            context=client.host().directory("/home/agent2/agent/sam_agent/template"),
             setup_cmd=[
                 ["bash","-lc","apt-get update && apt-get install -y curl ca-certificates git make pkg-config && rm -rf /var/lib/apt/lists/*"],
                 ["bash","-lc","curl -fsSL https://bun.sh/install | bash"],
