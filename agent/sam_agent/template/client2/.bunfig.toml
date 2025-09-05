@@ -1,0 +1,17 @@
+[install]
+# Use exact versions for reproducible builds
+exact = true
+
+# Enable peer dependency resolution
+peer = true
+
+[install.scopes]
+# Configure any scoped registries if needed
+
+[test]
+# Configure test environment
+preload = ["./test/setup.ts"]
+
+[run]
+# Configure run environment
+bun = true

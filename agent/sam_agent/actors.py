@@ -45,12 +45,13 @@ class SamAgentPaths:
                 "server/alembic/versions/"
             ],
             files_allowed_frontend=[
-                "client/src/App.tsx",
-                "client/src/components/",
-                "client/src/App.css",
-                "client/src/utils/api.ts",
+                "client2/src/App.vue",
+                "client2/src/components/",
+                "client2/src/index.css",
+                "client2/src/utils/api.ts",
+                "client2/src/main.ts",
             ],
-            files_protected_frontend=["client/src/components/ui/"],
+            files_protected_frontend=[],
             files_relevant_draft=[
                 "server/alembic/env.py",
                 "server/app/db/base.py",
@@ -60,7 +61,9 @@ class SamAgentPaths:
                 "server/app/config.py",
                 "server/app/main.py",
                 "server/app/routes.py",
-                "client/src/utils/api.ts",
+                "client2/src/utils/api.ts",
+                "client2/src/main.ts",
+                "client2/src/App.vue",
             ],
             files_relevant_handlers=[
                 "server/app/db/base.py",
@@ -74,7 +77,10 @@ class SamAgentPaths:
             files_relevant_frontend=[
                 "server/app/schema.py",
                 "server/app/routes.py",
-                "client/src/utils/api.ts",
+                "client2/src/utils/api.ts",
+                "client2/src/App.vue",
+                "client2/src/main.ts",
+                "client2/src/index.css",
             ],
             files_inherit_handlers=[
                 "server/app/schema.py",
@@ -129,7 +135,7 @@ class SamActor(FileOperationsActor):
 
         # Determine what to generate based on existing files
         has_schema = any(
-            f in files for f in ["server/app/schema.py", "server/app/db/base.py", "client/src/utils/api.ts"]
+            f in files for f in ["server/app/schema.py", "server/app/db/base.py", "client2/src/utils/api.ts"]
         )
 
         if not has_schema:
@@ -824,8 +830,8 @@ class SamActor(FileOperationsActor):
         # Add UI components info for frontend/edit contexts
         if context_type in ["frontend", "edit"]:
             try:
-                ui_files = await workspace.ls("client/src/components/ui")
-                context.append(f"UI components in client/src/components/ui: {ui_files}")
+                ui_files = await workspace.ls("client2/src/components")
+                context.append(f"UI components in client2/src/components: {ui_files}")
             except Exception:
                 pass
 
@@ -929,13 +935,13 @@ class SamActor(FileOperationsActor):
                         is_error=True,
                     )
                 else:
-                    package_path = "client/package.json"
+                    package_path = "client2/package.json"
                     node.data.files.update(
                         {
                             package_path: await node.data.workspace.read_file(
                                 package_path
                             ),
-                            "bun.lock": await node.data.workspace.read_file("client/bun.lock")
+                            "bun.lock": await node.data.workspace.read_file("client2/bun.lock")
                         }
                     )
                     return ToolUseResult.from_tool_use(tool_use, "success")

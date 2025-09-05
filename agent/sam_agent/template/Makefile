@@ -12,7 +12,7 @@ dev-server:
 	@cd server && uv run uvicorn --factory app.main:create_app --reload --port 2022
 
 dev-client:
-	@cd client && bun run dev
+	@cd client2 && bun run dev
 
 dev:
 		@set -m; \
@@ -36,12 +36,12 @@ check-py-health:
 	@curl -f http://localhost:2022/healthcheck
 
 check-ts:
-	@cd client && bun x tsc -p tsconfig.json --noEmit
+	@cd client2 && bun x tsc -p tsconfig.json --noEmit
 
 check: check-py-syntax check-ts
 
 sync-client:
-	@cd client && bun install
+	@cd client2 && bun install
 
 sync-server:
 	@cd server && uv sync
@@ -50,7 +50,7 @@ sync: sync-client sync-server
 
 
 client-build:
-	@cd client && bun run build
+	@cd client2 && bun run build
 
 client-lint:
-	@cd client && bun run lint
+	@cd client2 && bun run lint

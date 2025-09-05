@@ -1,13 +1,13 @@
 
     FROM oven/bun:1.2.2-alpine AS client-build
-    WORKDIR /work/client
+    WORKDIR /work/client2
 
-    COPY client/package.json .
-    COPY client/bun.lock* ./ 
+    COPY client2/package.json .
+    COPY client2/bun.lock* ./ 
     
     RUN bun install --frozen-lockfile
     
-    COPY client/ .
+    COPY client2/ .
     RUN bun run build
     
     FROM python:3.12-slim
@@ -30,8 +30,9 @@
     RUN uv sync --frozen || uv sync
     COPY server/ . 
 
-    COPY --from=client-build /work/client/dist /usr/share/caddy
-    COPY client/Caddyfile /app/client/Caddyfile
+    RUN mkdir -p /app/client2
+    COPY --from=client-build /work/client2/dist /app/client2
+    COPY client2/Caddyfile /app/client2/Caddyfile
     
     COPY supervisord.conf /etc/supervisord.conf
     
